@@ -127,14 +127,19 @@ bool SdlRenderer::isRenderThreadSupported()
     return true;
 }
 
-int SdlRenderer::getDecoderCapabilities()
+bool SdlRenderer::isPixelFormatSupported(int, AVPixelFormat pixelFormat)
 {
-    // Slice up to 4 times for parallel decode, once slice per core
-    int slices = qMin(MAX_SLICES, SDL_GetCPUCount());
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Encoder configured for %d slices per frame",
-                slices);
-    return CAPABILITY_SLICES_PER_FRAME(slices);
+    // Remember to keep this in sync with SdlRenderer::renderFrame()!
+    switch (pixelFormat)
+    {
+    case AV_PIX_FMT_YUV420P:
+    case AV_PIX_FMT_NV12:
+    case AV_PIX_FMT_NV21:
+        return true;
+
+    default:
+        return false;
+    }
 }
 
 bool SdlRenderer::initialize(PDECODER_PARAMETERS params)
@@ -281,6 +286,7 @@ void SdlRenderer::renderFrame(AVFrame* frame)
     if (m_Texture == nullptr) {
         Uint32 sdlFormat;
 
+        // Remember to keep this in sync with SdlRenderer::isPixelFormatSupported()!
         switch (frame->format)
         {
         case AV_PIX_FMT_YUV420P:
