@@ -29,6 +29,7 @@
 #include "cli/startstream.h"
 #include "cli/commandlineparser.h"
 #include "path.h"
+#include "utils.h"
 #include "gui/computermodel.h"
 #include "gui/appmodel.h"
 #include "backend/autoupdatechecker.h"
@@ -285,13 +286,26 @@ int main(int argc, char *argv[])
     AntiHookingDummyImport();
 #endif
 
-    // Enable High DPI support
-    QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    // Avoid using High DPI on EGLFS. It breaks font rendering.
+    // https://bugreports.qt.io/browse/QTBUG-64377
+    //
+    // NB: We can't use QGuiApplication::platformName() here because it is only
+    // set once the QGuiApplication is created, which is too late to enable High DPI :(
+    if (WMUtils::isRunningWindowManager()) {
+        // Enable High DPI support
+        QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
-    // Enable fractional High DPI scaling on Qt 5.14 and later
-    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+        // Enable fractional High DPI scaling on Qt 5.14 and later
+        QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 #endif
+    }
+    else {
+        if (qgetenv("QT_QPA_PLATFORM").isEmpty()) {
+            qInfo() << "Unable to detect Wayland or X11, so EGLFS will be used by default. Set QT_QPA_PLATFORM to override this.";
+            qputenv("QT_QPA_PLATFORM", "eglfs");
+        }
+    }
 
     // This avoids using the default keychain for SSL, which may cause
     // password prompts on macOS.
@@ -374,7 +388,7 @@ int main(int argc, char *argv[])
 
     // After the QGuiApplication is created, the platform stuff will be initialized
     // and we can set the SDL video driver to match Qt.
-    if (qgetenv("XDG_SESSION_TYPE") == "wayland" && QGuiApplication::platformName() == "xcb") {
+    if (WMUtils::isRunningWayland() && QGuiApplication::platformName() == "xcb") {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected XWayland. This will probably break hardware decoding! Try running with QT_QPA_PLATFORM=wayland or switch to X11.");
     }
@@ -397,6 +411,17 @@ int main(int argc, char *argv[])
     // Move the mouse to the bottom right so it's invisible when using
     // gamepad-only navigation.
     QCursor().setPos(0xFFFF, 0xFFFF);
+#elif defined(Q_OS_LINUX) && (defined(__arm__) || defined(__aarch64__))
+    if (qgetenv("SDL_VIDEO_GL_DRIVER").isEmpty() && QGuiApplication::platformName() == "eglfs") {
+        // Look for Raspberry Pi GLES libraries. SDL needs some help finding the correct
+        // libraries for the KMSDRM backend if not compiled with the RPI backend enabled.
+        if (SDL_LoadObject("libbrcmGLESv2.so") != nullptr) {
+            qputenv("SDL_VIDEO_GL_DRIVER", "libbrcmGLESv2.so");
+        }
+        else if (SDL_LoadObject("/opt/vc/lib/libbrcmGLESv2.so") != nullptr) {
+            qputenv("SDL_VIDEO_GL_DRIVER", "/opt/vc/lib/libbrcmGLESv2.so");
+        }
+    }
 #endif
 
     app.setWindowIcon(QIcon(":/res/moonlight.svg"));
