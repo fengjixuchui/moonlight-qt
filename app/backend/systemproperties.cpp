@@ -8,6 +8,7 @@
 
 SystemProperties::SystemProperties()
 {
+    hasWindowManager = WMUtils::isRunningWindowManager();
     isRunningWayland = WMUtils::isRunningWayland();
     isRunningXWayland = isRunningWayland && QGuiApplication::platformName() == "xcb";
 
@@ -18,7 +19,8 @@ SystemProperties::SystemProperties()
 #endif
 
 #ifndef STEAM_LINK
-    hasBrowser = true;
+    // Assume we can probably launch a browser if we're in a GUI environment
+    hasBrowser = hasWindowManager;
 #else
     hasBrowser = false;
 #endif
@@ -28,8 +30,6 @@ SystemProperties::SystemProperties()
 #else
     hasDiscordIntegration = false;
 #endif
-
-    hasWindowManager = WMUtils::isRunningWindowManager();
 
     unmappedGamepads = SdlInputHandler::getUnmappedGamepads();
 
@@ -114,11 +114,7 @@ void SystemProperties::querySdlVideoInfo()
         return;
     }
 
-    hasHardwareAcceleration =
-            Session::isHardwareDecodeAvailable(testWindow,
-                                               StreamingPreferences::VDS_AUTO,
-                                               VIDEO_FORMAT_H264,
-                                               1920, 1080, 60);
+    Session::getDecoderInfo(testWindow, hasHardwareAcceleration, rendererAlwaysFullScreen);
 
     SDL_DestroyWindow(testWindow);
 

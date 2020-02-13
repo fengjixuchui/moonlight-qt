@@ -10,6 +10,7 @@
 #include <QFont>
 #include <QCursor>
 #include <QElapsedTimer>
+#include <QFile>
 
 // Don't let SDL hook our main function, since Qt is already
 // doing the same thing. This needs to be before any headers
@@ -301,10 +302,17 @@ int main(int argc, char *argv[])
 #endif
     }
     else {
+#ifndef STEAM_LINK
         if (qgetenv("QT_QPA_PLATFORM").isEmpty()) {
             qInfo() << "Unable to detect Wayland or X11, so EGLFS will be used by default. Set QT_QPA_PLATFORM to override this.";
             qputenv("QT_QPA_PLATFORM", "eglfs");
+
+            if (!QFile("/dev/dri").exists()) {
+                qWarning() << "Unable to find a KMSDRM display device!";
+                qWarning() << "On Raspberry Pi 2 and 3, you must enable the 'fake KMS' driver in raspi-config to use Moonlight outside of the GUI environment.";
+            }
         }
+#endif
     }
 
     // This avoids using the default keychain for SSL, which may cause
@@ -346,6 +354,12 @@ int main(int argc, char *argv[])
     // and SDL_EnableScreenSaver() when appropriate. This hint must be set before
     // initializing the SDL video subsystem to have any effect.
     SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1");
+
+    // For SDL backends that support it, use double buffering instead of triple buffering
+    // to save a frame of latency. This doesn't matter for MMAL or DRM renderers since they
+    // are drawing directly to the screen without involving SDL, but it may matter for other
+    // future KMSDRM platforms that use SDL for rendering.
+    SDL_SetHint(SDL_HINT_VIDEO_DOUBLE_BUFFER, "1");
 
     if (SDL_InitSubSystem(SDL_INIT_TIMER) != 0) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,

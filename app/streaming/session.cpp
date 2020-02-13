@@ -252,6 +252,24 @@ int Session::drSubmitDecodeUnit(PDECODE_UNIT du)
     }
 }
 
+void Session::getDecoderInfo(SDL_Window* window,
+                             bool& isHardwareAccelerated, bool& isFullScreenOnly)
+{
+    IVideoDecoder* decoder;
+
+    if (!chooseDecoder(StreamingPreferences::VDS_AUTO,
+                       window, VIDEO_FORMAT_H264, 1920, 1080, 60,
+                       true, false, true, decoder)) {
+        isHardwareAccelerated = isFullScreenOnly = false;
+        return;
+    }
+
+    isHardwareAccelerated = decoder->isHardwareAccelerated();
+    isFullScreenOnly = decoder->isAlwaysFullScreen();
+
+    delete decoder;
+}
+
 bool Session::isHardwareDecodeAvailable(SDL_Window* window,
                                         StreamingPreferences::VideoDecoderSelection vds,
                                         int videoFormat, int width, int height, int frameRate)
@@ -441,6 +459,15 @@ bool Session::initialize()
     case StreamingPreferences::WM_FULLSCREEN:
         m_FullScreenFlag = SDL_WINDOW_FULLSCREEN;
         break;
+    }
+
+    // HACK: Using a full-screen window breaks mouse capture on the Pi's LXDE
+    // GUI environment. Force the session to use windowed mode (which won't
+    // really matter anyway because the MMAL renderer always draws full-screen).
+    if (qgetenv("DESKTOP_SESSION") == "LXDE-pi") {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Forcing windowed mode on LXDE-Pi");
+        m_FullScreenFlag = 0;
     }
 
     // Check for validation errors/warnings and emit
