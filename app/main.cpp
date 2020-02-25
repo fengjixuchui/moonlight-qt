@@ -74,7 +74,12 @@ void logToLoggerStream(QString& message)
         return;
     }
     else if (s_LogLinesWritten == MAX_LOG_LINES) {
-        s_LoggerStream << "Log size limit reached!" << endl;
+        s_LoggerStream << "Log size limit reached!";
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+        s_LoggerStream << Qt::endl;
+#else
+        s_LoggerStream << endl;
+#endif
         s_LogLimitReached = true;
         return;
     }
@@ -303,13 +308,13 @@ int main(int argc, char *argv[])
     }
     else {
 #ifndef STEAM_LINK
-        if (qgetenv("QT_QPA_PLATFORM").isEmpty()) {
+        if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
             qInfo() << "Unable to detect Wayland or X11, so EGLFS will be used by default. Set QT_QPA_PLATFORM to override this.";
             qputenv("QT_QPA_PLATFORM", "eglfs");
 
             if (!QFile("/dev/dri").exists()) {
                 qWarning() << "Unable to find a KMSDRM display device!";
-                qWarning() << "On Raspberry Pi 2 and 3, you must enable the 'fake KMS' driver in raspi-config to use Moonlight outside of the GUI environment.";
+                qWarning() << "On the Raspberry Pi, you must enable the 'fake KMS' driver in raspi-config to use Moonlight outside of the GUI environment.";
             }
         }
 #endif
@@ -391,6 +396,11 @@ int main(int argc, char *argv[])
     // Disable minimize on focus loss by default. Users seem to want this off by default.
     SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
 
+    // SDL 2.0.12 changes the default behavior to use the button label rather than the button
+    // position as most other software does. Set this back to 0 to stay consistent with prior
+    // releases of Moonlight.
+    SDL_SetHint("SDL_GAMECONTROLLER_USE_BUTTON_LABELS", "0");
+
 #ifdef QT_DEBUG
     // Allow thread naming using exceptions on debug builds. SDL doesn't use SEH
     // when throwing the exceptions, so we don't enable it for release builds out
@@ -425,10 +435,10 @@ int main(int argc, char *argv[])
     // Move the mouse to the bottom right so it's invisible when using
     // gamepad-only navigation.
     QCursor().setPos(0xFFFF, 0xFFFF);
-#elif defined(Q_OS_LINUX) && (defined(__arm__) || defined(__aarch64__))
+#elif !SDL_VERSION_ATLEAST(2, 0, 11) && defined(Q_OS_LINUX) && (defined(__arm__) || defined(__aarch64__))
     if (qgetenv("SDL_VIDEO_GL_DRIVER").isEmpty() && QGuiApplication::platformName() == "eglfs") {
-        // Look for Raspberry Pi GLES libraries. SDL needs some help finding the correct
-        // libraries for the KMSDRM backend if not compiled with the RPI backend enabled.
+        // Look for Raspberry Pi GLES libraries. SDL 2.0.10 and earlier needs some help finding
+        // the correct libraries for the KMSDRM backend if not compiled with the RPI backend enabled.
         if (SDL_LoadObject("libbrcmGLESv2.so") != nullptr) {
             qputenv("SDL_VIDEO_GL_DRIVER", "libbrcmGLESv2.so");
         }

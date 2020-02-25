@@ -1,4 +1,5 @@
 #include "nvcomputer.h"
+#include "utils.h"
 
 #include <QUdpSocket>
 #include <QHostInfo>
@@ -57,7 +58,7 @@ NvComputer::NvComputer(QSettings& settings)
     this->gpuModel = nullptr;
 }
 
-void NvComputer::serialize(QSettings& settings)
+void NvComputer::serialize(QSettings& settings) const
 {
     QReadLocker lock(&this->lock);
 
@@ -229,7 +230,7 @@ bool NvComputer::wake()
                     success = true;
                 }
                 else {
-                    qWarning() << "Send failed:" << sock.error();
+                    qWarning() << "Send failed:" << QSOCK_GET_ERROR(&sock);
                 }
             }
         }
@@ -313,7 +314,7 @@ bool NvComputer::isReachableOverVpn()
     }
 }
 
-QVector<QString> NvComputer::uniqueAddresses()
+QVector<QString> NvComputer::uniqueAddresses() const
 {
     QVector<QString> uniqueAddressList;
 

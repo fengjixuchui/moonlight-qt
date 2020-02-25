@@ -253,7 +253,7 @@ int Session::drSubmitDecodeUnit(PDECODE_UNIT du)
 }
 
 void Session::getDecoderInfo(SDL_Window* window,
-                             bool& isHardwareAccelerated, bool& isFullScreenOnly)
+                             bool& isHardwareAccelerated, bool& isFullScreenOnly, QSize& maxResolution)
 {
     IVideoDecoder* decoder;
 
@@ -266,6 +266,7 @@ void Session::getDecoderInfo(SDL_Window* window,
 
     isHardwareAccelerated = decoder->isHardwareAccelerated();
     isFullScreenOnly = decoder->isAlwaysFullScreen();
+    maxResolution = decoder->getDecoderMaxResolution();
 
     delete decoder;
 }
@@ -461,6 +462,7 @@ bool Session::initialize()
         break;
     }
 
+#if !SDL_VERSION_ATLEAST(2, 0, 11)
     // HACK: Using a full-screen window breaks mouse capture on the Pi's LXDE
     // GUI environment. Force the session to use windowed mode (which won't
     // really matter anyway because the MMAL renderer always draws full-screen).
@@ -469,6 +471,7 @@ bool Session::initialize()
                     "Forcing windowed mode on LXDE-Pi");
         m_FullScreenFlag = 0;
     }
+#endif
 
     // Check for validation errors/warnings and emit
     // signals for them, if appropriate
@@ -1080,11 +1083,13 @@ void Session::exec(int displayOriginX, int displayOriginY)
     // This prevents the mouse from becoming trapped inside
     // Moonlight when it's halted at a debug break.
     if (m_Preferences->windowMode != StreamingPreferences::WM_WINDOWED) {
+#if !SDL_VERSION_ATLEAST(2, 0, 11)
         // HACK: This doesn't work on Wayland until we render a frame, so
-        // just don't do it for now.
+        // just don't do it for now. This bug is fixed in SDL 2.0.11.
         if (strcmp(SDL_GetCurrentVideoDriver(), "wayland") != 0) {
             m_InputHandler->setCaptureActive(true);
         }
+#endif
     }
 #endif
 

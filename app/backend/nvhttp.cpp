@@ -1,4 +1,5 @@
 #include "nvhttp.h"
+#include "utils.h"
 #include <Limelight.h>
 
 #include <QDebug>
@@ -257,16 +258,16 @@ NvHTTP::getDisplayModeList(QString serverInfo)
     while (!xmlReader.atEnd()) {
         while (xmlReader.readNextStartElement()) {
             QStringRef name = xmlReader.name();
-            if (xmlReader.name() == "DisplayMode") {
+            if (name == "DisplayMode") {
                 modes.append(NvDisplayMode());
             }
-            else if (xmlReader.name() == "Width") {
+            else if (name == "Width") {
                 modes.last().width = xmlReader.readElementText().toInt();
             }
-            else if (xmlReader.name() == "Height") {
+            else if (name == "Height") {
                 modes.last().height = xmlReader.readElementText().toInt();
             }
-            else if (xmlReader.name() == "RefreshRate") {
+            else if (name == "RefreshRate") {
                 modes.last().refreshRate = xmlReader.readElementText().toInt();
             }
         }
@@ -290,7 +291,7 @@ NvHTTP::getAppList()
     while (!xmlReader.atEnd()) {
         while (xmlReader.readNextStartElement()) {
             QStringRef name = xmlReader.name();
-            if (xmlReader.name() == "App") {
+            if (name == "App") {
                 // We must have a valid app before advancing to the next one
                 if (!apps.isEmpty() && !apps.last().isInitialized()) {
                     qWarning() << "Invalid applist XML";
@@ -299,13 +300,13 @@ NvHTTP::getAppList()
                 }
                 apps.append(NvApp());
             }
-            else if (xmlReader.name() == "AppTitle") {
+            else if (name == "AppTitle") {
                 apps.last().name = xmlReader.readElementText();
             }
-            else if (xmlReader.name() == "ID") {
+            else if (name == "ID") {
                 apps.last().id = xmlReader.readElementText().toInt();
             }
-            else if (xmlReader.name() == "IsHdrSupported") {
+            else if (name == "IsHdrSupported") {
                 apps.last().hdrSupported = xmlReader.readElementText() == "1";
             }
         }
@@ -488,26 +489,26 @@ NvHTTP::openConnection(QUrl baseUrl,
     m_Nam.clearAccessCache();
 
     // Handle error
-    if (reply->error() != QNetworkReply::NoError)
+    if (QNETREPLY_GET_ERROR(reply) != QNetworkReply::NoError)
     {
         if (logLevel >= NvLogLevel::NVLL_ERROR) {
-            qWarning() << command << " request failed with error " << reply->error();
+            qWarning() << command << " request failed with error " << QNETREPLY_GET_ERROR(reply);
         }
 
-        if (reply->error() == QNetworkReply::SslHandshakeFailedError) {
+        if (QNETREPLY_GET_ERROR(reply) == QNetworkReply::SslHandshakeFailedError) {
             // This will trigger falling back to HTTP for the serverinfo query
             // then pairing again to get the updated certificate.
             GfeHttpResponseException exception(401, "Server certificate mismatch");
             delete reply;
             throw exception;
         }
-        else if (reply->error() == QNetworkReply::OperationCanceledError) {
+        else if (QNETREPLY_GET_ERROR(reply) == QNetworkReply::OperationCanceledError) {
             QtNetworkReplyException exception(QNetworkReply::TimeoutError, "Request timed out");
             delete reply;
             throw exception;
         }
         else {
-            QtNetworkReplyException exception(reply->error(), reply->errorString());
+            QtNetworkReplyException exception(QNETREPLY_GET_ERROR(reply), reply->errorString());
             delete reply;
             throw exception;
         }
