@@ -39,8 +39,6 @@ CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
     Session::clStageFailed,
     nullptr,
     Session::clConnectionTerminated,
-    nullptr,
-    nullptr,
     Session::clLogMessage,
     Session::clRumble,
     Session::clConnectionStatusUpdate
@@ -58,7 +56,7 @@ void Session::clStageStarting(int stage)
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 }
 
-void Session::clStageFailed(int stage, long errorCode)
+void Session::clStageFailed(int stage, int errorCode)
 {
     // We know this is called on the same thread as LiStartConnection()
     // which happens to be the main thread, so it's cool to interact
@@ -67,7 +65,7 @@ void Session::clStageFailed(int stage, long errorCode)
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 }
 
-void Session::clConnectionTerminated(long errorCode)
+void Session::clConnectionTerminated(int errorCode)
 {
     // Display the termination dialog if this was not intended
     if (errorCode != 0) {
@@ -76,7 +74,7 @@ void Session::clConnectionTerminated(long errorCode)
     }
 
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                 "Connection terminated: %ld",
+                 "Connection terminated: %d",
                  errorCode);
 
     // Push a quit event to the main loop
@@ -1086,10 +1084,11 @@ void Session::exec(int displayOriginX, int displayOriginY)
 #if !SDL_VERSION_ATLEAST(2, 0, 11)
         // HACK: This doesn't work on Wayland until we render a frame, so
         // just don't do it for now. This bug is fixed in SDL 2.0.11.
-        if (strcmp(SDL_GetCurrentVideoDriver(), "wayland") != 0) {
+        if (strcmp(SDL_GetCurrentVideoDriver(), "wayland") != 0)
+#endif
+        {
             m_InputHandler->setCaptureActive(true);
         }
-#endif
     }
 #endif
 
