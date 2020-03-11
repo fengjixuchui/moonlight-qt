@@ -87,6 +87,14 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, NvComputer*, int s
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "0");
 #endif
 
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+    // Enabling extended input reports allows rumble to function on Bluetooth PS4
+    // controllers, but breaks DirectInput applications. We will enable it because
+    // it's likely that working rumble is what the user is expecting. If they don't
+    // want this behavior, they can override it with the environment variable.
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
+#endif
+
     // We must initialize joystick explicitly before gamecontroller in order
     // to ensure we receive gamecontroller attach events for gamepads where
     // SDL doesn't have a built-in mapping. By starting joystick first, we
@@ -991,8 +999,10 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
         state->jsId = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(state->controller));
 
 #if SDL_VERSION_ATLEAST(2, 0, 9)
-        // Perform a no-op rumble to see if haptics are supported
-        hapticCaps = SDL_GameControllerRumble(controller, 0, 0, 0) == 0 ?
+        // Perform a tiny rumble to see if haptics are supported.
+        // NB: We cannot use zeros for rumble intensity or SDL will not actually call the JS driver
+        // and we'll get a (potentially false) success value returned.
+        hapticCaps = SDL_GameControllerRumble(controller, 1, 1, 1) == 0 ?
                         ML_HAPTIC_GC_RUMBLE : 0;
 #else
         state->haptic = SDL_HapticOpenFromJoystick(SDL_GameControllerGetJoystick(state->controller));
