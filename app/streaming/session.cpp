@@ -406,8 +406,11 @@ bool Session::initialize()
     m_AudioCallbacks.capabilities = getAudioRendererCapabilities(m_StreamConfig.audioConfiguration);
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Audio configuration: %d",
-                m_StreamConfig.audioConfiguration);
+                "Audio channel count: %d",
+                CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(m_StreamConfig.audioConfiguration));
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Audio channel mask: %X",
+                CHANNEL_MASK_FROM_AUDIO_CONFIGURATION(m_StreamConfig.audioConfiguration));
 
     switch (m_Preferences->videoCodecConfig)
     {
@@ -626,6 +629,18 @@ bool Session::validateLaunch(SDL_Window* testWindow)
     // Check for unmapped gamepads
     if (!SdlInputHandler::getUnmappedGamepads().isEmpty()) {
         emitLaunchWarning("An attached gamepad has no mapping and won't be usable. Visit the Moonlight help to resolve this.");
+    }
+
+    // NVENC will fail to initialize when using dimensions over 4096 and H.264.
+    if (m_StreamConfig.width > 4096 || m_StreamConfig.height > 4096) {
+        if (m_Computer->maxLumaPixelsHEVC == 0) {
+            emit displayLaunchError("Your host PC's GPU doesn't support streaming video resolutions over 4K.");
+            return false;
+        }
+        else if (!m_StreamConfig.supportsHevc) {
+            emit displayLaunchError("Video resolutions over 4K are only supported by the HEVC codec.");
+            return false;
+        }
     }
 
     if (m_Preferences->videoDecoderSelection == StreamingPreferences::VDS_FORCE_HARDWARE &&
