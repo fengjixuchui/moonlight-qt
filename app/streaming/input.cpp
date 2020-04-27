@@ -66,17 +66,17 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, NvComputer*, int s
       m_LongPressTimer(0),
       m_StreamWidth(streamWidth),
       m_StreamHeight(streamHeight),
-      m_AbsoluteMouseMode(false)
+      m_AbsoluteMouseMode(prefs.absoluteMouseMode)
 {
     // Allow gamepad input when the app doesn't have focus
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 
-    // If mouse acceleration is enabled, use relative mode warp (which
+    // If absolute mouse mode is enabled, use relative mode warp (which
     // is via normal motion events that are influenced by mouse acceleration).
     // Otherwise, we'll use raw input capture which is straight from the device
     // without modification by the OS.
     SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_MODE_WARP,
-                            prefs.mouseAcceleration ? "1" : "0",
+                            prefs.absoluteMouseMode ? "1" : "0",
                             SDL_HINT_OVERRIDE);
 
 #if defined(Q_OS_DARWIN) && !SDL_VERSION_ATLEAST(2, 0, 10)
@@ -354,11 +354,6 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         }
     }
 
-    if (!isCaptureActive()) {
-        // Not capturing
-        return;
-    }
-
     if (event->repeat) {
         // Ignore repeat key down events
         SDL_assert(event->state == SDL_PRESSED);
@@ -612,23 +607,21 @@ void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
 {
     int button;
 
-    // Capture the mouse again if clicked when unbound.
-    // We start capture on left button released instead of
-    // pressed to avoid sending an errant mouse button released
-    // event to the host when clicking into our window (since
-    // the pressed event was consumed by this code).
-    if (event->button == SDL_BUTTON_LEFT &&
-            event->state == SDL_RELEASED &&
-            !isCaptureActive()) {
-        setCaptureActive(true);
+    if (event->which == SDL_TOUCH_MOUSEID) {
+        // Ignore synthetic mouse events
         return;
     }
     else if (!isCaptureActive()) {
+        if (event->button == SDL_BUTTON_LEFT && event->state == SDL_RELEASED) {
+            // Capture the mouse again if clicked when unbound.
+            // We start capture on left button released instead of
+            // pressed to avoid sending an errant mouse button released
+            // event to the host when clicking into our window (since
+            // the pressed event was consumed by this code).
+            setCaptureActive(true);
+        }
+
         // Not capturing
-        return;
-    }
-    else if (event->which == SDL_TOUCH_MOUSEID) {
-        // Ignore synthetic mouse events
         return;
     }
 
@@ -1355,6 +1348,51 @@ void SdlInputHandler::raiseAllKeys()
     }
 
     m_KeysDown.clear();
+}
+
+void SdlInputHandler::notifyFocusGained(SDL_Window* window)
+{
+    // Capture mouse cursor when user actives the window by clicking on
+    // window's client area (borders and title bar excluded).
+    // Without this you would have to click the window twice (once to
+    // activate it, second time to enable capture). With this you need to
+    // click it only once.
+    //
+    // On Linux, the button press event is delivered after the focus gain
+    // so this is not neccessary (and leads to a click sent to the host
+    // when focusing the window by clicking).
+    //
+    // By excluding window's borders and title bar out, lets user still
+    // interact with them without mouse capture kicking in.
+#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN)
+    int mouseX, mouseY;
+    Uint32 mouseState = SDL_GetGlobalMouseState(&mouseX, &mouseY);
+    if (mouseState & SDL_BUTTON(SDL_BUTTON_LEFT)) {
+        int x, y, width, height;
+        SDL_GetWindowPosition(window, &x, &y);
+        SDL_GetWindowSize(window, &width, &height);
+        if (mouseX > x && mouseX < x+width && mouseY > y && mouseY < y+height) {
+            setCaptureActive(true);
+        }
+    }
+#else
+    Q_UNUSED(window);
+#endif
+}
+
+void SdlInputHandler::notifyFocusLost(SDL_Window* window)
+{
+    // Release mouse cursor when another window is activated (e.g. by using ALT+TAB).
+    // This lets user to interact with our window's title bar and with the buttons in it.
+    // Doing this while the window is full-screen breaks the transition out of FS
+    // (desktop and exclusive), so we must check for that before releasing mouse capture.
+    if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) && !m_AbsoluteMouseMode) {
+        setCaptureActive(false);
+    }
+
+    // Raise all keys that are currently pressed. If we don't do this, certain keys
+    // used in shortcuts that cause focus loss (such as Alt+Tab) may get stuck down.
+    raiseAllKeys();
 }
 
 bool SdlInputHandler::isCaptureActive()

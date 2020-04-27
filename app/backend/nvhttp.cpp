@@ -281,6 +281,9 @@ NvHTTP::getAppList()
             else if (name == "IsHdrSupported") {
                 apps.last().hdrSupported = xmlReader.readElementText() == "1";
             }
+            else if (name == "IsAppCollectorGame") {
+                apps.last().isAppCollectorGame = xmlReader.readElementText() == "1";
+            }
         }
     }
 
@@ -311,6 +314,12 @@ NvHTTP::verifyResponseStatus(QString xml)
                 if (statusCode != 401) {
                     // 401 is expected for unpaired PCs when we fetch serverinfo over HTTPS
                     qWarning() << "Request failed:" << statusCode << statusMessage;
+                }
+                if (statusCode == -1 && statusMessage == "Invalid") {
+                    // Special case handling an audio capture error which GFE doesn't
+                    // provide any useful status message for.
+                    statusCode = 418;
+                    statusMessage = "Missing audio capture device. Reinstalling GeForce Experience should resolve this error.";
                 }
                 throw GfeHttpResponseException(statusCode, statusMessage);
             }

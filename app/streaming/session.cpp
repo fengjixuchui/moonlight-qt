@@ -517,6 +517,10 @@ bool Session::validateLaunch(SDL_Window* testWindow)
 {
     QStringList warningList;
 
+    if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame) {
+        emitLaunchWarning("Your selection to enable remote desktop mouse mode may cause problems in games.");
+    }
+
     if (m_Preferences->videoDecoderSelection == StreamingPreferences::VDS_FORCE_SOFTWARE) {
         if (m_Preferences->videoCodecConfig == StreamingPreferences::VCC_FORCE_HEVC_HDR) {
             emitLaunchWarning("HDR is not supported with software decoding.");
@@ -863,10 +867,18 @@ void Session::toggleFullscreen()
     bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
 
     if (fullScreen) {
+        if (m_FullScreenFlag == SDL_WINDOW_FULLSCREEN) {
+            // Confine the cursor to the window
+            SDL_SetWindowGrab(m_Window, SDL_TRUE);
+        }
+
         SDL_SetWindowResizable(m_Window, SDL_FALSE);
         SDL_SetWindowFullscreen(m_Window, m_FullScreenFlag);
     }
     else {
+        // Unconfine the cursor
+        SDL_SetWindowGrab(m_Window, SDL_FALSE);
+
         SDL_SetWindowFullscreen(m_Window, 0);
         SDL_SetWindowResizable(m_Window, SDL_TRUE);
 
@@ -1106,6 +1118,11 @@ void Session::exec(int displayOriginX, int displayOriginY)
         SDL_SetWindowResizable(m_Window, SDL_TRUE);
     }
     else {
+        if (m_FullScreenFlag == SDL_WINDOW_FULLSCREEN) {
+            // Confine the cursor to the window
+            SDL_SetWindowGrab(m_Window, SDL_TRUE);
+        }
+
         // Update the window display mode based on our current monitor
         updateOptimalWindowDisplayMode();
 
@@ -1115,11 +1132,13 @@ void Session::exec(int displayOriginX, int displayOriginY)
 
     bool needsFirstEnterCapture = false;
 
-#ifndef QT_DEBUG
-    // Capture the mouse by default on release builds only.
-    // This prevents the mouse from becoming trapped inside
-    // Moonlight when it's halted at a debug break.
-    if (m_Preferences->windowMode != StreamingPreferences::WM_WINDOWED) {
+    // Capture the mouse in relative mode by default on release builds only.
+    // This prevents the mouse from becoming trapped inside Moonlight when
+    // it's halted at a debug break.
+#ifdef QT_DEBUG
+    if (prefs.absoluteMouseMode)
+#endif
+    {
         // HACK: For Wayland, we wait until we get the first SDL_WINDOWEVENT_ENTER
         // event where it seems to work consistently on GNOME.
         if (strcmp(SDL_GetCurrentVideoDriver(), "wayland") != 0) {
@@ -1129,7 +1148,6 @@ void Session::exec(int displayOriginX, int displayOriginY)
             needsFirstEnterCapture = true;
         }
     }
-#endif
 
     // Stop text input. SDL enables it by default
     // when we initialize the video subsystem, but this
@@ -1190,43 +1208,11 @@ void Session::exec(int displayOriginX, int displayOriginY)
             break;
 
         case SDL_WINDOWEVENT:
-            // Capture mouse cursor when user actives the window by clicking on
-            // window's client area (borders and title bar excluded).
-            // Without this you would have to click the window twice (once to
-            // activate it, second time to enable capture). With this you need to
-            // click it only once.
-            // On Linux, the button press event is delivered after the focus gain
-            // so this is not neccessary (and leads to a click sent to the host
-            // when focusing the window by clicking).
-            // By excluding window's borders and title bar out, lets user still
-            // interact with them without mouse capture kicking in.
-#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN)
             if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
-                int mouseX, mouseY;
-                Uint32 mouseState = SDL_GetGlobalMouseState(&mouseX, &mouseY);
-                if (mouseState & SDL_BUTTON(SDL_BUTTON_LEFT)) {
-                    int x, y, width, height;
-                    SDL_GetWindowPosition(m_Window, &x, &y);
-                    SDL_GetWindowSize(m_Window, &width, &height);
-                    if (mouseX > x && mouseX < x+width && mouseY > y && mouseY < y+height) {
-                        m_InputHandler->setCaptureActive(true);
-                    }
-                }
+                m_InputHandler->notifyFocusGained(m_Window);
             }
-#endif
-
-            if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-                // Release mouse cursor when another window is activated (e.g. by using ALT+TAB).
-                // This lets user to interact with our window's title bar and with the buttons in it.
-                // Doing this while the window is full-screen breaks the transition out of FS
-                // (desktop and exclusive), so we must check for that before releasing mouse capture.
-                if (!(SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN)) {
-                    m_InputHandler->setCaptureActive(false);
-                }
-
-                // Raise all keys that are currently pressed. If we don't do this, certain keys
-                // used in shortcuts that cause focus loss (such as Alt+Tab) may get stuck down.
-                m_InputHandler->raiseAllKeys();
+            else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                m_InputHandler->notifyFocusLost(m_Window);
             }
 
             // Capture the mouse on SDL_WINDOWEVENT_ENTER if needed
@@ -1361,6 +1347,7 @@ DispatchDeferredCleanup:
     // Uncapture the mouse and hide the window immediately,
     // so we can return to the Qt GUI ASAP.
     m_InputHandler->setCaptureActive(false);
+    SDL_SetWindowGrab(m_Window, SDL_FALSE);
     SDL_EnableScreenSaver();
     SDL_SetHint(SDL_HINT_TIMER_RESOLUTION, "0");
     if (QGuiApplication::platformName() == "eglfs") {
