@@ -11,7 +11,8 @@
 
 VAAPIRenderer::VAAPIRenderer()
     : m_HwContext(nullptr),
-      m_DrmFd(-1)
+      m_DrmFd(-1),
+      m_BlacklistedForDirectRendering(false)
 {
 
 }
@@ -156,6 +157,8 @@ VAAPIRenderer::openDisplay(SDL_Window* window)
                      info.subsystem);
         return nullptr;
     }
+
+    return display;
 }
 
 bool
@@ -230,6 +233,18 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
             }
 
             if (status != VA_STATUS_SUCCESS) {
+                // The RadeonSI driver is compatible with XWayland but can't be detected by libva
+                // so try it too if all else fails.
+                qputenv("LIBVA_DRIVER_NAME", "radeonsi");
+                status = vaInitialize(vaDeviceContext->display, &major, &minor);
+                if (status == VA_STATUS_SUCCESS && !validateDriver(vaDeviceContext->display)) {
+                    vaTerminate(vaDeviceContext->display);
+                    vaDeviceContext->display = openDisplay(params->window);
+                    status = VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+                }
+            }
+
+            if (status != VA_STATUS_SUCCESS) {
                 // Unset LIBVA_DRIVER_NAME if none of the drivers we tried worked. This ensures
                 // we will get a fresh start using the default driver selection behavior after
                 // setting LIBVA_DRIVERS_PATH in the code below.
@@ -285,6 +300,7 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
                 major, minor);
 
     const char* vendorString = vaQueryVendorString(vaDeviceContext->display);
+    QString vendorStr(vendorString);
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Driver: %s",
                 vendorString ? vendorString : "<unknown>");
@@ -293,9 +309,8 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
     // to be leaked for each submitted frame. The Flatpak runtime has a VDPAU
     // driver in place that works well, so use that instead on AMD systems. If
     // we're using Wayland, we have no choice but to use VAAPI because VDPAU
-    // is only supported under X11.
-    if (vendorString && qgetenv("FORCE_VAAPI") != "1" && m_WindowSystem == SDL_SYSWM_X11) {
-        QString vendorStr(vendorString);
+    // is only supported under X11 or XWayland.
+    if (qgetenv("FORCE_VAAPI") != "1" && !WMUtils::isRunningWayland()) {
         if (vendorStr.contains("AMD", Qt::CaseInsensitive) ||
                 vendorStr.contains("Radeon", Qt::CaseInsensitive)) {
             // Fail and let VDPAU pick this up
@@ -303,6 +318,12 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
                         "Avoiding VAAPI on AMD driver");
             return false;
         }
+    }
+
+    if (WMUtils::isRunningWayland()) {
+        // The iHD VAAPI driver can initialize on XWayland but it crashes in
+        // vaPutSurface() so we must also not directly render on XWayland.
+        m_BlacklistedForDirectRendering = vendorStr.contains("iHD");
     }
 
     // This will populate the driver_quirks
@@ -349,10 +370,8 @@ bool
 VAAPIRenderer::isDirectRenderingSupported()
 {
     // Many Wayland renderers don't support YUV surfaces, so use
-    // another frontend renderer to draw our frames. The iHD VAAPI
-    // driver can initialize on XWayland but it crashes in vaPutSurface()
-    // so we must also not directly render on XWayland either.
-    return m_WindowSystem == SDL_SYSWM_X11 && !WMUtils::isRunningWayland();
+    // another frontend renderer to draw our frames.
+    return m_WindowSystem == SDL_SYSWM_X11 && !m_BlacklistedForDirectRendering;
 }
 
 int VAAPIRenderer::getDecoderColorspace()
