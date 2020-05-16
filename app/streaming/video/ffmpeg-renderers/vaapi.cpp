@@ -5,6 +5,9 @@
 #include <streaming/streamutils.h>
 
 #include <SDL_syswm.h>
+#ifdef HAVE_EGL
+#include <SDL_egl.h>
+#endif
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -14,7 +17,11 @@ VAAPIRenderer::VAAPIRenderer()
       m_DrmFd(-1),
       m_BlacklistedForDirectRendering(false)
 {
-
+#ifdef HAVE_EGL
+    m_PrimeDescriptor.num_layers = 0;
+    m_PrimeDescriptor.num_objects = 0;
+    m_EGLExtDmaBuf = false;
+#endif
 }
 
 VAAPIRenderer::~VAAPIRenderer()
@@ -35,39 +42,6 @@ VAAPIRenderer::~VAAPIRenderer()
 
     if (m_DrmFd != -1) {
         close(m_DrmFd);
-    }
-}
-
-bool
-VAAPIRenderer::validateDriver(VADisplay display)
-{
-    const char* vendorString = vaQueryVendorString(display);
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Validating VAAPI driver: %s",
-                vendorString ? vendorString : "<unknown>");
-
-    if (isDirectRenderingSupported()) {
-        int entrypointCount;
-        VAEntrypoint entrypoints[vaMaxNumEntrypoints(display)];
-        VAStatus status = vaQueryConfigEntrypoints(display, VAProfileNone, entrypoints, &entrypointCount);
-        if (status == VA_STATUS_SUCCESS) {
-            for (int i = 0; i < entrypointCount; i++) {
-                // Without VAEntrypointVideoProc support, the driver will crash inside vaPutSurface()
-                if (entrypoints[i] == VAEntrypointVideoProc) {
-                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                                "VAEntrypointVideoProc is supported");
-                    return true;
-                }
-            }
-        }
-
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "VAAPI driver doesn't support VAEntrypointVideoProc!");
-        return false;
-    }
-    else {
-        // Indirect rendering can use any driver
-        return true;
     }
 }
 
@@ -193,11 +167,6 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
 
     for (;;) {
         status = vaInitialize(vaDeviceContext->display, &major, &minor);
-        if (status == VA_STATUS_SUCCESS && !validateDriver(vaDeviceContext->display)) {
-            vaTerminate(vaDeviceContext->display);
-            vaDeviceContext->display = openDisplay(params->window);
-            status = VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-        }
         if (status != VA_STATUS_SUCCESS && qEnvironmentVariableIsEmpty("LIBVA_DRIVER_NAME")) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Trying fallback VAAPI driver names");
@@ -212,11 +181,6 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
                 // always seem to be the case for some reason.
                 qputenv("LIBVA_DRIVER_NAME", "iHD");
                 status = vaInitialize(vaDeviceContext->display, &major, &minor);
-                if (status == VA_STATUS_SUCCESS && !validateDriver(vaDeviceContext->display)) {
-                    vaTerminate(vaDeviceContext->display);
-                    vaDeviceContext->display = openDisplay(params->window);
-                    status = VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-                }
             }
 
             if (status != VA_STATUS_SUCCESS) {
@@ -225,11 +189,6 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
                 // explicitly try i965 to handle this case.
                 qputenv("LIBVA_DRIVER_NAME", "i965");
                 status = vaInitialize(vaDeviceContext->display, &major, &minor);
-                if (status == VA_STATUS_SUCCESS && !validateDriver(vaDeviceContext->display)) {
-                    vaTerminate(vaDeviceContext->display);
-                    vaDeviceContext->display = openDisplay(params->window);
-                    status = VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-                }
             }
 
             if (status != VA_STATUS_SUCCESS) {
@@ -237,11 +196,6 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
                 // so try it too if all else fails.
                 qputenv("LIBVA_DRIVER_NAME", "radeonsi");
                 status = vaInitialize(vaDeviceContext->display, &major, &minor);
-                if (status == VA_STATUS_SUCCESS && !validateDriver(vaDeviceContext->display)) {
-                    vaTerminate(vaDeviceContext->display);
-                    vaDeviceContext->display = openDisplay(params->window);
-                    status = VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-                }
             }
 
             if (status != VA_STATUS_SUCCESS) {
@@ -369,9 +323,43 @@ VAAPIRenderer::needsTestFrame()
 bool
 VAAPIRenderer::isDirectRenderingSupported()
 {
-    // Many Wayland renderers don't support YUV surfaces, so use
-    // another frontend renderer to draw our frames.
-    return m_WindowSystem == SDL_SYSWM_X11 && !m_BlacklistedForDirectRendering;
+    if (qgetenv("VAAPI_FORCE_DIRECT") == "1") {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Using direct rendering due to environment variable");
+        return true;
+    }
+    else if (qgetenv("VAAPI_FORCE_INDIRECT") == "1") {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Using indirect rendering due to environment variable");
+        return false;
+    }
+
+    // We only support direct rendering on X11 with VAEntrypointVideoProc support
+    if (m_WindowSystem != SDL_SYSWM_X11 || m_BlacklistedForDirectRendering) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Using indirect rendering due to WM or blacklist");
+        return false;
+    }
+
+    AVHWDeviceContext* deviceContext = (AVHWDeviceContext*)m_HwContext->data;
+    AVVAAPIDeviceContext* vaDeviceContext = (AVVAAPIDeviceContext*)deviceContext->hwctx;
+    VAEntrypoint entrypoints[vaMaxNumEntrypoints(vaDeviceContext->display)];
+    int entrypointCount;
+    VAStatus status = vaQueryConfigEntrypoints(vaDeviceContext->display, VAProfileNone, entrypoints, &entrypointCount);
+    if (status == VA_STATUS_SUCCESS) {
+        for (int i = 0; i < entrypointCount; i++) {
+            // Without VAEntrypointVideoProc support, the driver will crash inside vaPutSurface()
+            if (entrypoints[i] == VAEntrypointVideoProc) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Using direct rendering with VAEntrypointVideoProc");
+                return true;
+            }
+        }
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Using indirect rendering due to lack of VAEntrypointVideoProc");
+    return false;
 }
 
 int VAAPIRenderer::getDecoderColorspace()
@@ -384,6 +372,11 @@ int VAAPIRenderer::getDecoderColorspace()
 void
 VAAPIRenderer::renderFrame(AVFrame* frame)
 {
+    if (frame == nullptr) {
+        // End of stream - nothing to do for us
+        return;
+    }
+
     VASurfaceID surface = (VASurfaceID)(uintptr_t)frame->data[3];
     AVHWDeviceContext* deviceContext = (AVHWDeviceContext*)m_HwContext->data;
     AVVAAPIDeviceContext* vaDeviceContext = (AVVAAPIDeviceContext*)deviceContext->hwctx;
@@ -442,3 +435,167 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
         SDL_assert(false);
     }
 }
+
+#ifdef HAVE_EGL
+
+// Ensure that vaExportSurfaceHandle() is supported by the VA-API driver
+bool
+VAAPIRenderer::canExportEGL() {
+    AVHWDeviceContext* deviceContext = (AVHWDeviceContext*)m_HwContext->data;
+    AVVAAPIDeviceContext* vaDeviceContext = (AVVAAPIDeviceContext*)deviceContext->hwctx;
+    VASurfaceID surfaceId;
+    VAStatus st;
+    VADRMPRIMESurfaceDescriptor descriptor;
+    VASurfaceAttrib attrs[2];
+    int attributeCount = 0;
+
+    // FFmpeg handles setting these quirk flags for us
+    if (!(vaDeviceContext->driver_quirks & AV_VAAPI_DRIVER_QUIRK_ATTRIB_MEMTYPE)) {
+        attrs[attributeCount].type = VASurfaceAttribMemoryType;
+        attrs[attributeCount].flags = VA_SURFACE_ATTRIB_SETTABLE;
+        attrs[attributeCount].value.type = VAGenericValueTypeInteger;
+        attrs[attributeCount].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_VA;
+        attributeCount++;
+    }
+
+    // These attributes are required for i965 to create a surface that can
+    // be successfully exported via vaExportSurfaceHandle(). iHD doesn't
+    // need these, but it doesn't seem to hurt either.
+    attrs[attributeCount].type = VASurfaceAttribPixelFormat;
+    attrs[attributeCount].flags = VA_SURFACE_ATTRIB_SETTABLE;
+    attrs[attributeCount].value.type = VAGenericValueTypeInteger;
+    attrs[attributeCount].value.value.i = VA_FOURCC_NV12;
+    attributeCount++;
+
+    st = vaCreateSurfaces(vaDeviceContext->display,
+                          VA_RT_FORMAT_YUV420,
+                          1280,
+                          720,
+                          &surfaceId,
+                          1,
+                          attrs,
+                          attributeCount);
+    if (st != VA_STATUS_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "vaCreateSurfaces() failed: %d", st);
+        return false;
+    }
+
+    st = vaExportSurfaceHandle(vaDeviceContext->display,
+                               surfaceId,
+                               VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+                               VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_SEPARATE_LAYERS,
+                               &descriptor);
+
+    vaDestroySurfaces(vaDeviceContext->display, &surfaceId, 1);
+
+    if (st != VA_STATUS_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "vaExportSurfaceHandle() failed: %d", st);
+        return false;
+    }
+
+    for (size_t i = 0; i < descriptor.num_objects; ++i) {
+        close(descriptor.objects[i].fd);
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "VAAPI driver supports exporting DRM PRIME surface handles");
+    return true;
+}
+
+bool
+VAAPIRenderer::initializeEGL(EGLDisplay,
+                             const EGLExtensions &ext) {
+    if (!ext.isSupported("EGL_EXT_image_dma_buf_import")) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "VAAPI-EGL: DMABUF unsupported");
+        return false;
+    }
+    m_EGLExtDmaBuf = ext.isSupported("EGL_EXT_image_dma_buf_import_modifiers");
+    return true;
+}
+
+ssize_t
+VAAPIRenderer::exportEGLImages(AVFrame *frame, EGLDisplay dpy,
+                               EGLImage images[EGL_MAX_PLANES]) {
+    ssize_t count = 0;
+    auto hwFrameCtx = (AVHWFramesContext*)frame->hw_frames_ctx->data;
+    AVVAAPIDeviceContext* vaDeviceContext = (AVVAAPIDeviceContext*)hwFrameCtx->device_ctx->hwctx;
+
+    VASurfaceID surface_id = (VASurfaceID)(uintptr_t)frame->data[3];
+    VAStatus st = vaExportSurfaceHandle(vaDeviceContext->display,
+                                        surface_id,
+                                        VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+                                        VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_SEPARATE_LAYERS,
+                                        &m_PrimeDescriptor);
+    if (st != VA_STATUS_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "vaExportSurfaceHandle failed: %d", st);
+        return -1;
+    }
+
+    SDL_assert(m_PrimeDescriptor.num_layers <= EGL_MAX_PLANES);
+
+    st = vaSyncSurface(vaDeviceContext->display, surface_id);
+    if (st != VA_STATUS_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "vaSyncSurface failed: %d", st);
+        goto sync_fail;
+    }
+
+    for (size_t i = 0; i < m_PrimeDescriptor.num_layers; ++i) {
+        const auto &layer = m_PrimeDescriptor.layers[i];
+        const auto &object = m_PrimeDescriptor.objects[layer.object_index[0]];
+
+        EGLAttrib attribs[17] = {
+            EGL_LINUX_DRM_FOURCC_EXT, (EGLint)layer.drm_format,
+            EGL_WIDTH, i == 0 ? frame->width : frame->width / 2,
+            EGL_HEIGHT, i == 0 ? frame->height : frame->height / 2,
+            EGL_DMA_BUF_PLANE0_FD_EXT, object.fd,
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT, (EGLint)layer.offset[0],
+            EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)layer.pitch[0],
+            EGL_NONE,
+        };
+        if (m_EGLExtDmaBuf) {
+            const EGLAttrib extra[] = {
+                EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
+                (EGLint)object.drm_format_modifier,
+                EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
+                (EGLint)(object.drm_format_modifier >> 32),
+                EGL_NONE,
+            };
+            memcpy((void *)(&attribs[12]), (void *)extra, sizeof (extra));
+        }
+        images[i] = eglCreateImage(dpy, EGL_NO_CONTEXT,
+                                   EGL_LINUX_DMA_BUF_EXT,
+                                   nullptr, attribs);
+        if (!images[i]) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "eglCreateImage() Failed: %d", eglGetError());
+            goto create_image_fail;
+        }
+        ++count;
+    }
+    return count;
+
+create_image_fail:
+    m_PrimeDescriptor.num_layers = count;
+sync_fail:
+    freeEGLImages(dpy, images);
+    return -1;
+}
+
+void
+VAAPIRenderer::freeEGLImages(EGLDisplay dpy, EGLImage images[EGL_MAX_PLANES]) {
+    for (size_t i = 0; i < m_PrimeDescriptor.num_layers; ++i) {
+        eglDestroyImage(dpy, images[i]);
+    }
+    for (size_t i = 0; i < m_PrimeDescriptor.num_objects; ++i) {
+        close(m_PrimeDescriptor.objects[i].fd);
+    }
+    m_PrimeDescriptor.num_layers = 0;
+    m_PrimeDescriptor.num_objects = 0;
+}
+
+#endif

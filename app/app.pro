@@ -264,6 +264,16 @@ libdrm {
     SOURCES += streaming/video/ffmpeg-renderers/drm.cpp
     HEADERS += streaming/video/ffmpeg-renderers/drm.h
 }
+config_EGL {
+    message(EGL renderer selected)
+
+    CONFIG += egl
+    DEFINES += HAVE_EGL
+    SOURCES += \
+        streaming/video/ffmpeg-renderers/eglvid.cpp \
+        streaming/video/ffmpeg-renderers/egl_extensions.cpp
+    HEADERS += streaming/video/ffmpeg-renderers/eglvid.h
+}
 config_SL {
     message(Steam Link build configuration selected)
 
