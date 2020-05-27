@@ -21,6 +21,7 @@ private:
     bool specialize();
     const float *getColorMatrix();
     static int loadAndBuildShader(int shaderType, const char *filename);
+    bool openDisplay(unsigned int platform, void* nativeDisplay);
 
     int m_SwPixelFormat;
     void *m_EGLDisplay;
@@ -32,6 +33,7 @@ private:
     unsigned int m_VAO;
     int m_ColorSpace;
     bool m_ColorFull;
+    bool m_BlockingSwapBuffers;
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES;
     PFNGLGENVERTEXARRAYSOESPROC m_glGenVertexArraysOES;
     PFNGLBINDVERTEXARRAYOESPROC m_glBindVertexArrayOES;

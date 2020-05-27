@@ -15,6 +15,18 @@
 #include <SDL_render.h>
 #include <SDL_syswm.h>
 
+#ifndef EGL_VERSION_1_5
+typedef intptr_t EGLAttrib;
+#endif
+
+#if !defined(EGL_VERSION_1_5) || !defined(EGL_EGL_PROTOTYPES)
+typedef EGLDisplay (EGLAPIENTRYP PFNEGLGETPLATFORMDISPLAYPROC) (EGLenum platform, void *native_display, const EGLAttrib *attrib_list);
+#endif
+
+#ifndef EGL_EXT_platform_base
+typedef EGLDisplay (EGLAPIENTRYP PFNEGLGETPLATFORMDISPLAYEXTPROC) (EGLenum platform, void *native_display, const EGLint *attrib_list);
+#endif
+
 // These are EGL extensions, so some platform headers may not provide them
 #ifndef EGL_PLATFORM_WAYLAND_KHR
 #define EGL_PLATFORM_WAYLAND_KHR 0x31D8
@@ -49,7 +61,7 @@
 EGLRenderer::EGLRenderer(IFFmpegRenderer *backendRenderer)
     :
         m_SwPixelFormat(AV_PIX_FMT_NONE),
-        m_EGLDisplay(nullptr),
+        m_EGLDisplay(EGL_NO_DISPLAY),
         m_Textures{0},
         m_ShaderProgram(0),
         m_Context(0),
@@ -58,6 +70,7 @@ EGLRenderer::EGLRenderer(IFFmpegRenderer *backendRenderer)
         m_VAO(0),
         m_ColorSpace(AVCOL_SPC_NB),
         m_ColorFull(false),
+        m_BlockingSwapBuffers(false),
         m_glEGLImageTargetTexture2DOES(nullptr),
         m_glGenVertexArraysOES(nullptr),
         m_glBindVertexArrayOES(nullptr),
@@ -148,6 +161,54 @@ int EGLRenderer::loadAndBuildShader(int shaderType,
     }
 
     return shader;
+}
+
+bool EGLRenderer::openDisplay(unsigned int platform, void* nativeDisplay)
+{
+    PFNEGLGETPLATFORMDISPLAYPROC eglGetPlatformDisplayProc;
+    PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXTProc;
+
+    m_EGLDisplay = EGL_NO_DISPLAY;
+
+    // NB: eglGetPlatformDisplay() and eglGetPlatformDisplayEXT() have slightly different definitions
+    eglGetPlatformDisplayProc = (typeof(eglGetPlatformDisplayProc))eglGetProcAddress("eglGetPlatformDisplay");
+    eglGetPlatformDisplayEXTProc = (typeof(eglGetPlatformDisplayEXTProc))eglGetProcAddress("eglGetPlatformDisplayEXT");
+
+    if (m_EGLDisplay == EGL_NO_DISPLAY) {
+        // eglGetPlatformDisplay() is part of the EGL 1.5 core specification
+        if (eglGetPlatformDisplayProc != nullptr) {
+            m_EGLDisplay = eglGetPlatformDisplayProc(platform, nativeDisplay, nullptr);
+            if (m_EGLDisplay == EGL_NO_DISPLAY) {
+                EGL_LOG(Warn, "eglGetPlatformDisplay() failed: %d", eglGetError());
+            }
+        }
+    }
+
+    if (m_EGLDisplay == EGL_NO_DISPLAY) {
+        // eglGetPlatformDisplayEXT() is an extension for EGL 1.4
+        const EGLExtensions eglExtensions(EGL_NO_DISPLAY);
+        if (eglExtensions.isSupported("EGL_EXT_platform_base")) {
+            if (eglGetPlatformDisplayEXTProc != nullptr) {
+                m_EGLDisplay = eglGetPlatformDisplayEXTProc(platform, nativeDisplay, nullptr);
+                if (m_EGLDisplay == EGL_NO_DISPLAY) {
+                    EGL_LOG(Warn, "eglGetPlatformDisplayEXT() failed: %d", eglGetError());
+                }
+            }
+            else {
+                EGL_LOG(Warn, "EGL_EXT_platform_base supported but no eglGetPlatformDisplayEXT() export!");
+            }
+        }
+    }
+
+    if (m_EGLDisplay == EGL_NO_DISPLAY) {
+        // Finally, if all else fails, use eglGetDisplay()
+        m_EGLDisplay = eglGetDisplay((EGLNativeDisplayType)nativeDisplay);
+        if (m_EGLDisplay == EGL_NO_DISPLAY) {
+            EGL_LOG(Error, "eglGetDisplay() failed: %d", eglGetError());
+        }
+    }
+
+    return m_EGLDisplay != EGL_NO_DISPLAY;
 }
 
 bool EGLRenderer::compileShader() {
@@ -256,14 +317,16 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
     switch (info.subsystem) {
 #ifdef SDL_VIDEO_DRIVER_WAYLAND
     case SDL_SYSWM_WAYLAND:
-        m_EGLDisplay = eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR,
-                                             info.info.wl.display, nullptr);
+        if (!openDisplay(EGL_PLATFORM_WAYLAND_KHR, info.info.wl.display)) {
+            return false;
+        }
         break;
 #endif
 #ifdef SDL_VIDEO_DRIVER_X11
     case SDL_SYSWM_X11:
-        m_EGLDisplay = eglGetPlatformDisplay(EGL_PLATFORM_X11_KHR,
-                                             info.info.x11.display, nullptr);
+        if (!openDisplay(EGL_PLATFORM_X11_KHR, info.info.x11.display)) {
+            return false;
+        }
         break;
 #endif
     default:
@@ -271,7 +334,7 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         return false;
     }
 
-    if (!m_EGLDisplay) {
+    if (m_EGLDisplay == EGL_NO_DISPLAY) {
         EGL_LOG(Error, "Cannot get EGL display: %d", eglGetError());
         return false;
     }
@@ -339,9 +402,13 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (params->enableVsync) {
-        /* Try to use adaptive VSYNC */
-        if (SDL_GL_SetSwapInterval(-1))
+        // Try to use adaptive VSYNC unless we're using frame pacing.
+        // Frame pacing relies on us blocking in renderFrame() to
+        // match the display refresh rate.
+        if (params->enableFramePacing || SDL_GL_SetSwapInterval(-1)) {
             SDL_GL_SetSwapInterval(1);
+            m_BlockingSwapBuffers = true;
+        }
     } else {
         SDL_GL_SetSwapInterval(0);
     }
@@ -542,6 +609,19 @@ void EGLRenderer::renderFrame(AVFrame* frame)
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
     SDL_GL_SwapWindow(m_Window);
+
+    if (m_BlockingSwapBuffers) {
+        // This glClear() forces us to block until the buffer swap is
+        // complete to continue rendering. Mesa won't actually wait
+        // for the swap with just glFinish() alone. Waiting here keeps us
+        // in lock step with the display refresh rate. If we don't wait
+        // here, we'll stall on the first GL call next frame. Doing the
+        // wait here instead allows more time for a newer frame to arrive
+        // for next renderFrame() call.
+        glClear(GL_COLOR_BUFFER_BIT);
+        glFinish();
+    }
+
     if (frame->hw_frames_ctx != nullptr)
         m_Backend->freeEGLImages(m_EGLDisplay, imgs);
 }
