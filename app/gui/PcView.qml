@@ -153,6 +153,26 @@ CenteredGridView {
             id: pcContextMenu
             NavigableMenuItem {
                 parentMenu: pcContextMenu
+                text: "View Apps"
+                onTriggered: {
+                    var component = Qt.createComponent("AppView.qml")
+                    var appView = component.createObject(stackView, {"computerIndex": index, "objectName": model.name})
+                    stackView.push(appView)
+                }
+                visible: model.online && model.paired
+            }
+            NavigableMenuItem {
+                parentMenu: pcContextMenu
+                text: "View Hidden Apps"
+                onTriggered: {
+                    var component = Qt.createComponent("AppView.qml")
+                    var appView = component.createObject(stackView, {"computerIndex": index, "objectName": model.name, "showHiddenGames": true})
+                    stackView.push(appView)
+                }
+                visible: model.online && model.paired
+            }
+            NavigableMenuItem {
+                parentMenu: pcContextMenu
                 text: "Delete PC"
                 onTriggered: {
                     deletePcDialog.pcIndex = index
@@ -187,7 +207,7 @@ CenteredGridView {
                 }
                 else {
                     if (!model.busy) {
-                        var pin = ("0000" + Math.floor(Math.random() * 10000)).slice(-4)
+                        var pin = computerModel.generatePinString()
 
                         // Kick off pairing in the background
                         computerModel.pairComputer(index, pin)
