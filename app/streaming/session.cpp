@@ -79,6 +79,11 @@ void Session::clConnectionTerminated(int errorCode)
         emit s_ActiveSession->displayLaunchError("No video received from host. Check the host PC's firewall and port forwarding rules.");
         break;
 
+    case ML_ERROR_NO_VIDEO_FRAME:
+        s_ActiveSession->m_UnexpectedTermination = true;
+        emit s_ActiveSession->displayLaunchError("Your network connection isn't performing well. Reduce your video bitrate setting or try a faster connection.");
+        break;
+
     default:
         s_ActiveSession->m_UnexpectedTermination = true;
         emit s_ActiveSession->displayLaunchError("Connection terminated");
@@ -936,8 +941,6 @@ private:
 // Called in a non-main thread
 bool Session::startConnectionAsync()
 {
-    StreamingPreferences prefs;
-
     // Wait 1.5 seconds before connecting to let the user
     // have time to read any messages present on the segue
     SDL_Delay(1500);
@@ -957,7 +960,7 @@ bool Session::startConnectionAsync()
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Found host supported resolution: %dx%d",
                         mode.width, mode.height);
-            enableGameOptimizations = prefs.gameOptimizations;
+            enableGameOptimizations = m_Preferences->gameOptimizations;
             break;
         }
     }
@@ -970,7 +973,7 @@ bool Session::startConnectionAsync()
         else {
             http.launchApp(m_App.id, &m_StreamConfig,
                            enableGameOptimizations,
-                           prefs.playAudioOnHost,
+                           m_Preferences->playAudioOnHost,
                            m_InputHandler->getAttachedGamepadMask());
         }
     } catch (const GfeHttpResponseException& e) {
@@ -1059,8 +1062,7 @@ void Session::exec(int displayOriginX, int displayOriginY)
 
     // Initialize the gamepad code with our preferences
     // NB: m_InputHandler must be initialize before starting the connection.
-    StreamingPreferences prefs;
-    m_InputHandler = new SdlInputHandler(prefs, m_Computer,
+    m_InputHandler = new SdlInputHandler(*m_Preferences, m_Computer,
                                          m_StreamConfig.width,
                                          m_StreamConfig.height);
 
@@ -1195,7 +1197,7 @@ void Session::exec(int displayOriginX, int displayOriginY)
     m_UnexpectedTermination = false;
 
     // Start rich presence to indicate we're in game
-    RichPresenceManager presence(prefs, m_App.name);
+    RichPresenceManager presence(*m_Preferences, m_App.name);
 
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
