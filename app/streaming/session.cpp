@@ -35,6 +35,14 @@
 
 #define CONN_TEST_SERVER "qt.conntest.moonlight-stream.org"
 
+// Running the connection process asynchronously seems to reliably
+// cause a crash in QSGRenderThread on Wayland and strange crashes
+// elsewhere. Until these are figured out, avoid the async connect
+// thread on Linux and BSDs.
+#if !defined(Q_OS_UNIX) || defined(Q_OS_DARWIN)
+#define USE_ASYNC_CONNECT_THREAD 1
+#endif
+
 CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
     Session::clStageStarting,
     nullptr,
@@ -55,6 +63,11 @@ void Session::clStageStarting(int stage)
     // which happens to be the main thread, so it's cool to interact
     // with the GUI in these callbacks.
     emit s_ActiveSession->stageStarting(QString::fromLocal8Bit(LiGetStageName(stage)));
+
+#ifndef USE_ASYNC_CONNECT_THREAD
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    QCoreApplication::sendPostedEvents();
+#endif
 }
 
 void Session::clStageFailed(int stage, int errorCode)
@@ -63,6 +76,11 @@ void Session::clStageFailed(int stage, int errorCode)
     s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, LiGetPortFlagsFromStage(stage));
 
     emit s_ActiveSession->stageFailed(QString::fromLocal8Bit(LiGetStageName(stage)), errorCode);
+
+#ifndef USE_ASYNC_CONNECT_THREAD
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    QCoreApplication::sendPostedEvents();
+#endif
 }
 
 void Session::clConnectionTerminated(int errorCode)
@@ -372,13 +390,21 @@ bool Session::initialize()
     }
 
     // Create a hidden window to use for decoder initialization tests
-    SDL_Window* testWindow = SDL_CreateWindow("", 0, 0, 1280, 720, SDL_WINDOW_HIDDEN);
+    SDL_Window* testWindow = SDL_CreateWindow("", 0, 0, 1280, 720,
+                                              SDL_WINDOW_HIDDEN | StreamUtils::getPlatformWindowFlags());
     if (!testWindow) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Failed to create window for hardware decode test: %s",
-                     SDL_GetError());
-        SDL_QuitSubSystem(SDL_INIT_VIDEO);
-        return false;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Failed to create test window with platform flags: %s",
+                    SDL_GetError());
+
+        testWindow = SDL_CreateWindow("", 0, 0, 1280, 720, SDL_WINDOW_HIDDEN);
+        if (!testWindow) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Failed to create window for hardware decode test: %s",
+                         SDL_GetError());
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+            return false;
+        }
     }
 
     qInfo() << "Server GPU:" << m_Computer->gpuModel;
@@ -930,7 +956,6 @@ public:
         QThread(nullptr),
         m_Session(session) {}
 
-private:
     void run() override
     {
         m_Session->m_AsyncConnectionSuccess = m_Session->startConnectionAsync();
@@ -944,7 +969,17 @@ bool Session::startConnectionAsync()
 {
     // Wait 1.5 seconds before connecting to let the user
     // have time to read any messages present on the segue
+#ifdef USE_ASYNC_CONNECT_THREAD
     SDL_Delay(1500);
+#else
+    uint32_t start = SDL_GetTicks();
+    while (!SDL_TICKS_PASSED(SDL_GetTicks(), start + 1500)) {
+        // Pump the UI loop while we wait since we're not async
+        SDL_Delay(5);
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        QCoreApplication::sendPostedEvents();
+    }
+#endif
 
     // The UI should have ensured the old game was already quit
     // if we decide to stream a different game.
@@ -1069,11 +1104,15 @@ void Session::exec(int displayOriginX, int displayOriginY)
 
     // Kick off the async connection thread while we sit here and pump the event loop
     AsyncConnectionStartThread asyncConnThread(this);
+#ifdef USE_ASYNC_CONNECT_THREAD
     asyncConnThread.start();
     while (!asyncConnThread.wait(10)) {
         QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
         QCoreApplication::sendPostedEvents();
     }
+#else
+    asyncConnThread.run();
+#endif
 
     // Pump the event loop one last time to ensure we pick up any events from
     // the thread that happened while it was in the final successful QThread::wait().
@@ -1104,16 +1143,29 @@ void Session::exec(int displayOriginX, int displayOriginY)
                                 y,
                                 width,
                                 height,
-                                SDL_WINDOW_ALLOW_HIGHDPI);
+                                SDL_WINDOW_ALLOW_HIGHDPI | StreamUtils::getPlatformWindowFlags());
     if (!m_Window) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "SDL_CreateWindow() failed: %s",
-                     SDL_GetError());
-        delete m_InputHandler;
-        m_InputHandler = nullptr;
-        SDL_QuitSubSystem(SDL_INIT_VIDEO);
-        QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
-        return;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "SDL_CreateWindow() failed with platform flags: %s",
+                    SDL_GetError());
+
+        m_Window = SDL_CreateWindow("Moonlight",
+                                    x,
+                                    y,
+                                    width,
+                                    height,
+                                    SDL_WINDOW_ALLOW_HIGHDPI);
+        if (!m_Window) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "SDL_CreateWindow() failed: %s",
+                         SDL_GetError());
+
+            delete m_InputHandler;
+            m_InputHandler = nullptr;
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+            QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
+            return;
+        }
     }
 
     m_InputHandler->setWindow(m_Window);

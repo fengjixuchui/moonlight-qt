@@ -84,6 +84,8 @@ public:
 
     void updateMousePositionReport(int mouseX, int mouseY);
 
+    void flushMousePositionUpdate();
+
     static
     QString getUnmappedGamepads();
 
@@ -118,6 +120,7 @@ private:
     SDL_Window* m_Window;
     bool m_MultiController;
     bool m_GamepadMouse;
+    bool m_SwapMouseButtons;
     SDL_TimerID m_MouseMoveTimer;
     SDL_atomic_t m_MouseDeltaX;
     SDL_atomic_t m_MouseDeltaY;
