@@ -1,5 +1,6 @@
 import QtQuick 2.9
 import QtQuick.Controls 2.2
+import QtQuick.Layouts 1.2
 
 import StreamingPreferences 1.0
 import ComputerManager 1.0
@@ -8,7 +9,7 @@ import SystemProperties 1.0
 
 Flickable {
     id: settingsPage
-    objectName: "Settings"
+    objectName: qsTr("Settings")
 
     boundsBehavior: Flickable.OvershootBounds
 
@@ -50,7 +51,7 @@ Flickable {
             id: basicSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
-            title: "<font color=\"skyblue\">Basic Settings</font>"
+            title: "<font color=\"skyblue\">" + qsTr("Basic Settings") + "</font>"
             font.pointSize: 12
 
             Column {
@@ -78,6 +79,8 @@ Flickable {
                     width: parent.width
 
                     AutoResizingComboBox {
+                        property int lastIndexValue
+
                         // ignore setting the index at first, and actually set it when the component is loaded
                         Component.onCompleted: {
                             // Add native resolutions for all attached displays
@@ -123,7 +126,8 @@ Flickable {
                                                                    {
                                                                        "text": "Native ("+screenRect.width+"x"+screenRect.height+")",
                                                                        "video_width": ""+screenRect.width,
-                                                                       "video_height": ""+screenRect.height
+                                                                       "video_height": ""+screenRect.height,
+                                                                       "is_custom": false
                                                                    })
                                     }
                                 }
@@ -147,19 +151,42 @@ Flickable {
                             // and set it to that index.
                             var saved_width = StreamingPreferences.width
                             var saved_height = StreamingPreferences.height
-                            currentIndex = 0
+                            var index_set = false
                             for (var i = 0; i < resolutionListModel.count; i++) {
                                 var el_width = parseInt(resolutionListModel.get(i).video_width);
                                 var el_height = parseInt(resolutionListModel.get(i).video_height);
 
-                                // Pick the highest value lesser or equal to the saved resolution
-                                if (saved_width * saved_height >= el_width * el_height) {
+                                if (saved_width === el_width && saved_height === el_height) {
                                     currentIndex = i
+                                    index_set = true
+                                    break
                                 }
                             }
 
-                            // Persist the selected value
-                            activated(currentIndex)
+                            if (!index_set) {
+                                // We did not find a match. This must be a custom resolution.
+                                resolutionListModel.append({
+                                                               "text": "Custom ("+StreamingPreferences.width+"x"+StreamingPreferences.height+")",
+                                                               "video_width": ""+StreamingPreferences.width,
+                                                               "video_height": ""+StreamingPreferences.height,
+                                                               "is_custom": true
+                                                           })
+                                currentIndex = resolutionListModel.count - 1
+                            }
+                            else {
+                                resolutionListModel.append({
+                                                               "text": "Custom",
+                                                               "video_width": "",
+                                                               "video_height": "",
+                                                               "is_custom": true
+                                                           })
+                            }
+
+                            // Since we don't call activate() here, we need to trigger
+                            // width calculation manually
+                            recalculateWidth()
+
+                            lastIndexValue = currentIndex
                         }
 
                         id: resolutionComboBox
@@ -170,28 +197,32 @@ Flickable {
                             // Other elements may be added at runtime
                             // based on attached display resolution
                             ListElement {
-                                text: "720p"
+                                text: qsTr("720p")
                                 video_width: "1280"
                                 video_height: "720"
+                                is_custom: false
                             }
                             ListElement {
-                                text: "1080p"
+                                text: qsTr("1080p")
                                 video_width: "1920"
                                 video_height: "1080"
+                                is_custom: false
                             }
                             ListElement {
-                                text: "1440p"
+                                text: qsTr("1440p")
                                 video_width: "2560"
                                 video_height: "1440"
+                                is_custom: false
                             }
                             ListElement {
-                                text: "4K"
+                                text: qsTr("4K")
                                 video_width: "3840"
                                 video_height: "2160"
+                                is_custom: false
                             }
                         }
-                        // ::onActivated must be used, as it only listens for when the index is changed by a human
-                        onActivated : {
+
+                        function updateBitrateForSelection() {
                             var selectedWidth = parseInt(resolutionListModel.get(currentIndex).video_width)
                             var selectedHeight = parseInt(resolutionListModel.get(currentIndex).video_height)
 
@@ -205,6 +236,146 @@ Flickable {
                                                                                                           StreamingPreferences.fps);
                                 slider.value = StreamingPreferences.bitrateKbps
                             }
+
+                            lastIndexValue = currentIndex
+                        }
+
+                        // ::onActivated must be used, as it only listens for when the index is changed by a human
+                        onActivated : {
+                            if (resolutionListModel.get(currentIndex).is_custom) {
+                                customResolutionDialog.open()
+                            }
+                            else {
+                                updateBitrateForSelection()
+                            }
+                        }
+
+                        NavigableDialog {
+                            id: customResolutionDialog
+                            standardButtons: Dialog.Ok | Dialog.Cancel
+                            onOpened: {
+                                // Force keyboard focus on the textbox so keyboard navigation works
+                                widthField.forceActiveFocus()
+
+                                // standardButton() was added in Qt 5.10, so we must check for it first
+                                if (customResolutionDialog.standardButton) {
+                                    customResolutionDialog.standardButton(Dialog.Ok).enabled = customResolutionDialog.isInputValid()
+                                }
+                            }
+
+                            onClosed: {
+                                widthField.clear()
+                                heightField.clear()
+                            }
+
+                            onRejected: {
+                                resolutionComboBox.currentIndex = resolutionComboBox.lastIndexValue
+                            }
+
+                            function isInputValid() {
+                                // If we have text in either textbox that isn't valid,
+                                // reject the input.
+                                if ((!widthField.acceptableInput && widthField.text) ||
+                                        (!heightField.acceptableInput && heightField.text)) {
+                                    return false
+                                }
+
+                                // The textboxes need to have text or placeholder text
+                                if ((!widthField.text && !widthField.placeholderText) ||
+                                        (!heightField.text && !heightField.placeholderText)) {
+                                    return false
+                                }
+
+                                return true
+                            }
+
+                            onAccepted: {
+                                // Reject if there's invalid input
+                                if (!isInputValid()) {
+                                    reject()
+                                    return
+                                }
+
+                                var width = widthField.text ? widthField.text : widthField.placeholderText
+                                var height = heightField.text ? heightField.text : heightField.placeholderText
+
+                                // Find and update the custom entry
+                                for (var i = 0; i < resolutionListModel.count; i++) {
+                                    if (resolutionListModel.get(i).is_custom) {
+                                        resolutionListModel.setProperty(i, "video_width", width)
+                                        resolutionListModel.setProperty(i, "video_height", height)
+                                        resolutionListModel.setProperty(i, "text", "Custom ("+width+"x"+height+")")
+
+                                        // Now update the bitrate using the custom resolution
+                                        resolutionComboBox.currentIndex = i
+                                        resolutionComboBox.updateBitrateForSelection()
+
+                                        // Update the combobox width too
+                                        resolutionComboBox.recalculateWidth()
+                                        break
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Label {
+                                    text: qsTr("Custom resolutions are not officially supported by GeForce Experience, so it will not set your host display resolution. You will need to set it manually while in game.") + "\n\n" +
+                                          qsTr("Resolutions that are not supported by your client or host PC may cause streaming errors.") + "\n"
+                                    wrapMode: Label.WordWrap
+                                    Layout.maximumWidth: 300
+                                }
+
+                                Label {
+                                    text: qsTr("Enter a custom resolution:")
+                                    font.bold: true
+                                }
+
+                                RowLayout {
+                                    TextField {
+                                        id: widthField
+                                        maximumLength: 5
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        placeholderText: resolutionListModel.get(resolutionComboBox.currentIndex).video_width
+                                        validator: IntValidator{bottom:128; top:8192}
+                                        focus: true
+
+                                        onTextChanged: {
+                                            // standardButton() was added in Qt 5.10, so we must check for it first
+                                            if (customResolutionDialog.standardButton) {
+                                                customResolutionDialog.standardButton(Dialog.Ok).enabled = customResolutionDialog.isInputValid()
+                                            }
+                                        }
+
+                                        Keys.onReturnPressed: {
+                                            customResolutionDialog.accept()
+                                        }
+                                    }
+
+                                    Label {
+                                        text: "x"
+                                        font.bold: true
+                                    }
+
+                                    TextField {
+                                        id: heightField
+                                        maximumLength: 5
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        placeholderText: resolutionListModel.get(resolutionComboBox.currentIndex).video_height
+                                        validator: IntValidator{bottom:128; top:8192}
+
+                                        onTextChanged: {
+                                            // standardButton() was added in Qt 5.10, so we must check for it first
+                                            if (customResolutionDialog.standardButton) {
+                                                customResolutionDialog.standardButton(Dialog.Ok).enabled = customResolutionDialog.isInputValid()
+                                            }
+                                        }
+
+                                        Keys.onReturnPressed: {
+                                            customResolutionDialog.accept()
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -215,16 +386,16 @@ Flickable {
                             var max_fps = SystemProperties.maximumStreamingFrameRate
 
                             // Default entries
-                            fpsListModel.append({"text": "30 FPS", "video_fps": "30"})
-                            fpsListModel.append({"text": "60 FPS", "video_fps": "60"})
+                            fpsListModel.append({"text": qsTr("%1 FPS").arg("30"), "video_fps": "30"})
+                            fpsListModel.append({"text": qsTr("%1 FPS").arg("60"), "video_fps": "60"})
 
                             // Add unsupported FPS values that come before the display max FPS
                             if (StreamingPreferences.unsupportedFps) {
                                 if (max_fps > 90) {
-                                    fpsListModel.append({"text": "90 FPS (Unsupported)", "video_fps": "90"})
+                                    fpsListModel.append({"text": qsTr("%1 FPS (Unsupported)").arg("90"), "video_fps": "90"})
                                 }
                                 if (max_fps > 120) {
-                                    fpsListModel.append({"text": "120 FPS (Unsupported)", "video_fps": "120"})
+                                    fpsListModel.append({"text": qsTr("%1 FPS (Unsupported)").arg("120"), "video_fps": "120"})
                                 }
                             }
 
@@ -233,23 +404,23 @@ Flickable {
                             if (max_fps > 64) {
                                 // Mark any FPS value greater than 120 as unsupported
                                 if (StreamingPreferences.unsupportedFps && max_fps > 120) {
-                                    fpsListModel.append({"text": max_fps+" FPS (Unsupported)", "video_fps": ""+max_fps})
+                                    fpsListModel.append({"text": qsTr("%1 FPS (Unsupported)").arg(max_fps), "video_fps": ""+max_fps})
                                 }
                                 else if (max_fps > 120) {
-                                    fpsListModel.append({"text": "120 FPS", "video_fps": "120"})
+                                    fpsListModel.append({"text": qsTr("%1 FPS").arg("120"), "video_fps": "120"})
                                 }
                                 else {
-                                    fpsListModel.append({"text": max_fps+" FPS", "video_fps": ""+max_fps})
+                                    fpsListModel.append({"text": qsTr("%1 FPS").arg(max_fps), "video_fps": ""+max_fps})
                                 }
                             }
 
                             // Add unsupported FPS values that come after the display max FPS
                             if (StreamingPreferences.unsupportedFps) {
                                 if (max_fps < 90) {
-                                    fpsListModel.append({"text": "90 FPS (Unsupported)", "video_fps": "90"})
+                                    fpsListModel.append({"text":qsTr("%1 FPS (Unsupported)").arg("90"), "video_fps": "90"})
                                 }
                                 if (max_fps < 120) {
-                                    fpsListModel.append({"text": "120 FPS (Unsupported)", "video_fps": "120"})
+                                    fpsListModel.append({"text":qsTr("%1 FPS (Unsupported)").arg("120"), "video_fps": "120"})
                                 }
                             }
 
@@ -302,7 +473,7 @@ Flickable {
                 Label {
                     width: parent.width
                     id: bitrateTitle
-                    text: qsTr("Video bitrate: ")
+                    text: qsTr("Video bitrate:")
                     font.pointSize: 12
                     wrapMode: Text.Wrap
                 }
@@ -328,7 +499,7 @@ Flickable {
                     width: Math.min(bitrateDesc.implicitWidth, parent.width)
 
                     onValueChanged: {
-                        bitrateTitle.text = "Video bitrate: " + (value / 1000.0) + " Mbps"
+                        bitrateTitle.text = qsTr("Video bitrate: %1 Mbps").arg(value / 1000.0)
                         StreamingPreferences.bitrateKbps = value
                     }
                 }
@@ -348,7 +519,7 @@ Flickable {
                         for (var i = 0; i < windowModeListModel.count; i++) {
                              var thisWm = windowModeListModel.get(i).val;
                              if (thisWm === StreamingPreferences.recommendedFullScreenMode) {
-                                 windowModeListModel.get(i).text += " (Recommended)"
+                                 windowModeListModel.get(i).text += qsTr(" (Recommended)")
                                  windowModeListModel.move(i, 0, 1);
                                  break
                              }
@@ -377,15 +548,15 @@ Flickable {
                     model: ListModel {
                         id: windowModeListModel
                         ListElement {
-                            text: "Full-screen"
+                            text: qsTr("Full-screen")
                             val: StreamingPreferences.WM_FULLSCREEN
                         }
                         ListElement {
-                            text: "Borderless windowed"
+                            text: qsTr("Borderless windowed")
                             val: StreamingPreferences.WM_FULLSCREEN_DESKTOP
                         }
                         ListElement {
-                            text: "Windowed"
+                            text: qsTr("Windowed")
                             val: StreamingPreferences.WM_WINDOWED
                         }
                     }
@@ -396,14 +567,14 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "Full-screen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc."
+                    ToolTip.text: qsTr("Full-screen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.")
                 }
 
                 CheckBox {
                     id: vsyncCheck
                     width: parent.width
                     hoverEnabled: true
-                    text: "V-Sync"
+                    text: qsTr("V-Sync")
                     font.pointSize:  12
                     checked: StreamingPreferences.enableVsync
                     onCheckedChanged: {
@@ -413,14 +584,14 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing"
+                    ToolTip.text: qsTr("Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing")
                 }
 
                 CheckBox {
                     id: framePacingCheck
                     width: parent.width
                     hoverEnabled: true
-                    text: "Frame pacing"
+                    text: qsTr("Frame pacing")
                     font.pointSize:  12
                     enabled: StreamingPreferences.enableVsync
                     checked: StreamingPreferences.enableVsync && StreamingPreferences.framePacing
@@ -430,7 +601,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "Frame pacing reduces micro-stutter by delaying frames that come in too early"
+                    ToolTip.text: qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
                 }
             }
         }
@@ -440,7 +611,7 @@ Flickable {
             id: audioSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
-            title: "<font color=\"skyblue\">Audio Settings</font>"
+            title: "<font color=\"skyblue\">" + qsTr("Audio Settings") + "</font>"
             font.pointSize: 12
 
             Column {
@@ -475,15 +646,15 @@ Flickable {
                     model: ListModel {
                         id: audioListModel
                         ListElement {
-                            text: "Stereo"
+                            text: qsTr("Stereo")
                             val: StreamingPreferences.AC_STEREO
                         }
                         ListElement {
-                            text: "5.1 surround sound"
+                            text: qsTr("5.1 surround sound")
                             val: StreamingPreferences.AC_51_SURROUND
                         }
                         ListElement {
-                            text: "7.1 surround sound"
+                            text: qsTr("7.1 surround sound")
                             val: StreamingPreferences.AC_71_SURROUND
                         }
                     }
@@ -500,7 +671,7 @@ Flickable {
             id: uiSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
-            title: "<font color=\"skyblue\">UI Settings</font>"
+            title: "<font color=\"skyblue\">" + qsTr("UI Settings") + "</font>"
             font.pointSize: 12
 
             Column {
@@ -510,7 +681,7 @@ Flickable {
                 CheckBox {
                     id: startMaximizedCheck
                     width: parent.width
-                    text: "Maximize Moonlight window on startup"
+                    text: qsTr("Maximize Moonlight window on startup")
                     font.pointSize: 12
                     enabled: SystemProperties.hasWindowManager
                     checked: !StreamingPreferences.startWindowed || !SystemProperties.hasWindowManager
@@ -522,7 +693,7 @@ Flickable {
                 CheckBox {
                     id: connectionWarningsCheck
                     width: parent.width
-                    text: "Show connection quality warnings"
+                    text: qsTr("Show connection quality warnings")
                     font.pointSize: 12
                     checked: StreamingPreferences.connectionWarnings
                     onCheckedChanged: {
@@ -534,7 +705,7 @@ Flickable {
                     visible: SystemProperties.hasDiscordIntegration
                     id: discordPresenceCheck
                     width: parent.width
-                    text: "Discord Rich Presence integration"
+                    text: qsTr("Discord Rich Presence integration")
                     font.pointSize: 12
                     checked: StreamingPreferences.richPresence
                     onCheckedChanged: {
@@ -544,7 +715,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "Updates your Discord status to display the name of the game you're streaming."
+                    ToolTip.text: qsTr("Updates your Discord status to display the name of the game you're streaming.")
                 }
             }
         }
@@ -562,7 +733,7 @@ Flickable {
             id: gamepadSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
-            title: "<font color=\"skyblue\">Input Settings</font>"
+            title: "<font color=\"skyblue\">" + qsTr("Input Settings") + "</font>"
             font.pointSize: 12
 
             Column {
@@ -572,7 +743,7 @@ Flickable {
                 CheckBox {
                     id: singleControllerCheck
                     width: parent.width
-                    text: "Force gamepad #1 always present"
+                    text: qsTr("Force gamepad #1 always present")
                     font.pointSize:  12
                     checked: !StreamingPreferences.multiController
                     onCheckedChanged: {
@@ -582,15 +753,15 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "Forces a single gamepad to always stay connected to the host, even if no gamepads are actually connected to this PC.\n" +
-                                  "Only enable this option when streaming a game that doesn't support gamepads being connected after startup."
+                    ToolTip.text: qsTr("Forces a single gamepad to always stay connected to the host, even if no gamepads are actually connected to this PC.") + "\n" +
+                                  qsTr("Only enable this option when streaming a game that doesn't support gamepads being connected after startup.")
                 }
 
                 CheckBox {
                     id: absoluteMouseCheck
                     hoverEnabled: true
                     width: parent.width
-                    text: "Optimize mouse for remote desktop instead of games"
+                    text: qsTr("Optimize mouse for remote desktop instead of games")
                     font.pointSize:  12
                     enabled: SystemProperties.hasWindowManager
                     checked: StreamingPreferences.absoluteMouseMode && SystemProperties.hasWindowManager
@@ -601,15 +772,15 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "This enables mouse control without capturing the client's mouse cursor. It will not work in most games.\n
-                                   You can toggle this while streaming using Ctrl+Alt+Shift+M."
+                    ToolTip.text: qsTr("This enables mouse control without capturing the client's mouse cursor. It will not work in most games.") + "\n" +
+                                  qsTr("You can toggle this while streaming using Ctrl+Alt+Shift+M.")
                 }
 
                 CheckBox {
                     id: absoluteTouchCheck
                     hoverEnabled: true
                     width: parent.width
-                    text: "Use touchscreen as a trackpad"
+                    text: qsTr("Use touchscreen as a trackpad")
                     font.pointSize:  12
                     checked: !StreamingPreferences.absoluteTouchMode
                     onCheckedChanged: {
@@ -619,14 +790,14 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "When checked, the touchscreen acts like a trackpad. When unchecked, the touchscreen will directly control the mouse pointer."
+                    ToolTip.text: qsTr("When checked, the touchscreen acts like a trackpad. When unchecked, the touchscreen will directly control the mouse pointer.")
                 }
 
                 CheckBox {
                     id: gamepadMouseCheck
                     hoverEnabled: true
                     width: parent.width
-                    text: "Gamepad mouse mode support"
+                    text: qsTr("Gamepad mouse mode support")
                     font.pointSize:  12
                     checked: StreamingPreferences.gamepadMouse
                     onCheckedChanged: {
@@ -636,14 +807,14 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
                     ToolTip.visible: hovered
-                    ToolTip.text: "When enabled, holding the Start button will toggle mouse mode"
+                    ToolTip.text: qsTr("When enabled, holding the Start button will toggle mouse mode")
                 }
 
                 CheckBox {
                     id: swapMouseButtonsCheck
                     hoverEnabled: true
                     width: parent.width
-                    text: "Swap mouse buttons"
+                    text: qsTr("Swap mouse buttons")
                     font.pointSize:  12
                     checked: StreamingPreferences.swapMouseButtons
                     onCheckedChanged: {
@@ -653,7 +824,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
                     ToolTip.visible: hovered
-                    ToolTip.text: "When checked, swap the left and right mouse buttons"
+                    ToolTip.text: qsTr("When checked, swap the left and right mouse buttons")
                 }
             }
         }
@@ -662,7 +833,7 @@ Flickable {
             id: hostSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
-            title: "<font color=\"skyblue\">Host Settings</font>"
+            title: "<font color=\"skyblue\">" + qsTr("Host Settings") + "</font>"
             font.pointSize: 12
 
             Column {
@@ -672,7 +843,7 @@ Flickable {
                 CheckBox {
                     id: optimizeGameSettingsCheck
                     width: parent.width
-                    text: "Optimize game settings for streaming"
+                    text: qsTr("Optimize game settings for streaming")
                     font.pointSize:  12
                     checked: StreamingPreferences.gameOptimizations
                     onCheckedChanged: {
@@ -683,7 +854,7 @@ Flickable {
                 CheckBox {
                     id: audioPcCheck
                     width: parent.width
-                    text: "Play audio on host PC"
+                    text: qsTr("Play audio on host PC")
                     font.pointSize:  12
                     checked: StreamingPreferences.playAudioOnHost
                     onCheckedChanged: {
@@ -694,7 +865,7 @@ Flickable {
                 CheckBox {
                     id: quitAppAfter
                     width: parent.width
-                    text: "Quit app on host PC after ending stream"
+                    text: qsTr("Quit app on host PC after ending stream")
                     font.pointSize: 12
                     checked: StreamingPreferences.quitAppAfter
                     onCheckedChanged: {
@@ -704,7 +875,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: "This will close the app or game you are streaming when you end your stream. You will lose any unsaved progress!"
+                    ToolTip.text: qsTr("This will close the app or game you are streaming when you end your stream. You will lose any unsaved progress!")
                 }
             }
         }
@@ -713,7 +884,7 @@ Flickable {
             id: advancedSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
-            title: "<font color=\"skyblue\">Advanced Settings</font>"
+            title: "<font color=\"skyblue\">" + qsTr("Advanced Settings") + "</font>"
             font.pointSize: 12
 
             Column {
@@ -748,15 +919,15 @@ Flickable {
                     model: ListModel {
                         id: decoderListModel
                         ListElement {
-                            text: "Automatic (Recommended)"
+                            text: qsTr("Automatic (Recommended)")
                             val: StreamingPreferences.VDS_AUTO
                         }
                         ListElement {
-                            text: "Force software decoding"
+                            text: qsTr("Force software decoding")
                             val: StreamingPreferences.VDS_FORCE_SOFTWARE
                         }
                         ListElement {
-                            text: "Force hardware decoding"
+                            text: qsTr("Force hardware decoding")
                             val: StreamingPreferences.VDS_FORCE_HARDWARE
                         }
                     }
@@ -794,19 +965,19 @@ Flickable {
                     model: ListModel {
                         id: codecListModel
                         ListElement {
-                            text: "Automatic (Recommended)"
+                            text: qsTr("Automatic (Recommended)")
                             val: StreamingPreferences.VCC_AUTO
                         }
                         ListElement {
-                            text: "H.264"
+                            text: qsTr("H.264")
                             val: StreamingPreferences.VCC_FORCE_H264
                         }
                         ListElement {
-                            text: "HEVC (H.265)"
+                            text: qsTr("HEVC (H.265)")
                             val: StreamingPreferences.VCC_FORCE_HEVC
                         }
                         /*ListElement {
-                            text: "HEVC HDR (Experimental)"
+                            text: qsTr("HEVC HDR (Experimental)")
                             val: StreamingPreferences.VCC_FORCE_HEVC_HDR
                         }*/
                     }
@@ -819,7 +990,7 @@ Flickable {
                 CheckBox {
                     id: unlockUnsupportedFps
                     width: parent.width
-                    text: "Unlock unsupported FPS options"
+                    text: qsTr("Unlock unsupported FPS options")
                     font.pointSize: 12
                     checked: StreamingPreferences.unsupportedFps
                     onCheckedChanged: {
@@ -838,7 +1009,7 @@ Flickable {
                 CheckBox {
                     id: enableMdns
                     width: parent.width
-                    text: "Automatically find PCs on the local network (Recommended)"
+                    text: qsTr("Automatically find PCs on the local network (Recommended)")
                     font.pointSize: 12
                     checked: StreamingPreferences.enableMdns
                     onCheckedChanged: {
@@ -863,7 +1034,7 @@ Flickable {
                 CheckBox {
                     id: detectNetworkBlocking
                     width: parent.width
-                    text: "Automatically detect blocked connections (Recommended)"
+                    text: qsTr("Automatically detect blocked connections (Recommended)")
                     font.pointSize: 12
                     checked: StreamingPreferences.detectNetworkBlocking
                     onCheckedChanged: {

@@ -10,6 +10,7 @@ CenteredGridView {
     property AppModel appModel : createModel()
     property bool activated
     property bool showHiddenGames
+    property bool showGames
 
     id: appGrid
     focus: true
@@ -38,6 +39,19 @@ CenteredGridView {
         // Highlight the first item if a gamepad is connected
         if (currentIndex == -1 && SdlGamepadKeyNavigation.getConnectedGamepads() > 0) {
             currentIndex = 0
+        }
+
+        if (!showGames && !showHiddenGames) {
+            // Check if there's a direct launch app
+            var directLaunchAppIndex = model.getDirectLaunchAppIndex();
+            if (directLaunchAppIndex >= 0) {
+                // Start the direct launch app if nothing else is running
+                currentIndex = directLaunchAppIndex
+                currentItem.launchOrResumeSelectedApp(false)
+
+                // Set showGames so we will not loop when the stream ends
+                showGames = true
+            }
         }
     }
 
@@ -112,10 +126,10 @@ CenteredGridView {
             }
 
             onClicked: {
-                launchOrResumeSelectedApp()
+                launchOrResumeSelectedApp(true)
             }
 
-            ToolTip.text: "Resume Game"
+            ToolTip.text: qsTr("Resume Game")
             ToolTip.delay: 1000
             ToolTip.timeout: 3000
             ToolTip.visible: hovered
@@ -143,7 +157,7 @@ CenteredGridView {
                 doQuitGame()
             }
 
-            ToolTip.text: "Quit Game"
+            ToolTip.text: qsTr("Quit Game")
             ToolTip.delay: 1000
             ToolTip.timeout: 3000
             ToolTip.visible: hovered
@@ -167,15 +181,18 @@ CenteredGridView {
             elide: Text.ElideRight
         }
 
-        function launchOrResumeSelectedApp()
+        function launchOrResumeSelectedApp(quitExistingApp)
         {
             var runningId = appModel.getRunningAppId()
             if (runningId !== 0 && runningId !== model.appid) {
-                quitAppDialog.appName = appModel.getRunningAppName()
-                quitAppDialog.segueToStream = true
-                quitAppDialog.nextAppName = model.name
-                quitAppDialog.nextAppIndex = index
-                quitAppDialog.open()
+                if (quitExistingApp) {
+                    quitAppDialog.appName = appModel.getRunningAppName()
+                    quitAppDialog.segueToStream = true
+                    quitAppDialog.nextAppName = model.name
+                    quitAppDialog.nextAppIndex = index
+                    quitAppDialog.open()
+                }
+
                 return
             }
 
@@ -190,7 +207,7 @@ CenteredGridView {
             // will handle starting the game and clicks on the box art will
             // be ignored.
             if (!model.running) {
-                launchOrResumeSelectedApp()
+                launchOrResumeSelectedApp(true)
             }
         }
 
@@ -225,11 +242,8 @@ CenteredGridView {
         }
 
         Keys.onMenuPressed: {
-            if (model.running) {
-                // This will be keyboard/gamepad driven so use
-                // open() instead of popup()
-                appContextMenu.open()
-            }
+            // This will be keyboard/gamepad driven so use open() instead of popup()
+            appContextMenu.open()
         }
 
         function doQuitGame() {
@@ -242,22 +256,35 @@ CenteredGridView {
             id: appContextMenu
             NavigableMenuItem {
                 parentMenu: appContextMenu
-                text: model.running ? "Resume Game" : "Launch Game"
-                onTriggered: launchOrResumeSelectedApp()
+                text: model.running ? qsTr("Resume Game") : qsTr("Launch Game")
+                onTriggered: launchOrResumeSelectedApp(true)
             }
             NavigableMenuItem {
                 parentMenu: appContextMenu
-                text: "Quit Game"
+                text: qsTr("Quit Game")
                 onTriggered: doQuitGame()
                 visible: model.running
             }
             NavigableMenuItem {
                 parentMenu: appContextMenu
                 checkable: true
+                checked: model.directLaunch
+                text: qsTr("Direct Launch")
+                onTriggered: appModel.setAppDirectLaunch(model.index, !model.directLaunch)
+                enabled: !model.hidden
+
+                ToolTip.text: qsTr("Launch this app immediately when the host is selected, bypassing the app selection grid.")
+                ToolTip.delay: 1000
+                ToolTip.timeout: 3000
+                ToolTip.visible: hovered
+            }
+            NavigableMenuItem {
+                parentMenu: appContextMenu
+                checkable: true
                 checked: model.hidden
-                text: "Hide Game"
+                text: qsTr("Hide Game")
                 onTriggered: appModel.setAppHidden(model.index, !model.hidden)
-                visible: !model.running || model.hidden
+                enabled: model.hidden || (!model.running && !model.directLaunch)
             }
         }
     }
@@ -268,7 +295,7 @@ CenteredGridView {
         property bool segueToStream : false
         property string nextAppName: ""
         property int nextAppIndex: 0
-        text:"Are you sure you want to quit " + appName +"? Any unsaved progress will be lost."
+        text:qsTr("Are you sure you want to quit %1? Any unsaved progress will be lost.").arg(appName)
         standardButtons: Dialog.Yes | Dialog.No
 
         function quitApp() {

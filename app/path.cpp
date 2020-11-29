@@ -6,6 +6,7 @@
 #include <QSettings>
 #include <QCoreApplication>
 
+QString Path::s_CacheDir;
 QString Path::s_LogDir;
 QString Path::s_BoxArtCacheDir;
 
@@ -28,11 +29,43 @@ QByteArray Path::readDataFile(QString fileName)
     return dataFile.readAll();
 }
 
+void Path::writeCacheFile(QString fileName, QByteArray data)
+{
+    QDir cacheDir(s_CacheDir);
+
+    // Create the cache path if it does not exist
+    if (!cacheDir.exists()) {
+        cacheDir.mkpath(".");
+    }
+
+    QFile dataFile(cacheDir.absoluteFilePath(fileName));
+    dataFile.open(QIODevice::WriteOnly);
+    dataFile.write(data);
+}
+
+void Path::deleteCacheFile(QString fileName)
+{
+    QFile dataFile(QDir(s_CacheDir).absoluteFilePath(fileName));
+    dataFile.remove();
+}
+
+QFileInfo Path::getCacheFileInfo(QString fileName)
+{
+    return QFileInfo(QDir(s_CacheDir), fileName);
+}
+
 QString Path::getDataFilePath(QString fileName)
 {
     QString candidatePath;
 
-    // Check the current directory first
+    // Check the cache location first (used by Path::writeDataFile())
+    candidatePath = QDir(s_CacheDir).absoluteFilePath(fileName);
+    if (QFile::exists(candidatePath)) {
+        qInfo() << "Found" << fileName << "at" << candidatePath;
+        return candidatePath;
+    }
+
+    // Check the current directory
     candidatePath = QDir(QDir::currentPath()).absoluteFilePath(fileName);
     if (QFile::exists(candidatePath)) {
         qInfo() << "Found" << fileName << "at" << candidatePath;
@@ -40,7 +73,7 @@ QString Path::getDataFilePath(QString fileName)
     }
 
     // Now check the data directories (for Linux, in particular)
-    candidatePath = QStandardPaths::locate(QStandardPaths::DataLocation, fileName);
+    candidatePath = QStandardPaths::locate(QStandardPaths::AppDataLocation, fileName);
     if (!candidatePath.isEmpty() && QFile::exists(candidatePath)) {
         qInfo() << "Found" << fileName << "at" << candidatePath;
         return candidatePath;
@@ -64,6 +97,10 @@ void Path::initialize(bool portable)
     if (portable) {
         s_LogDir = QDir::currentPath();
         s_BoxArtCacheDir = QDir::currentPath() + "/boxart";
+
+        // In order for the If-Modified-Since logic to work in MappingFetcher,
+        // the cache directory must be different than the current directory.
+        s_CacheDir = QDir::currentPath() + "/cache";
     }
     else {
 #ifdef Q_OS_DARWIN
@@ -73,6 +110,7 @@ void Path::initialize(bool portable)
 #else
         s_LogDir = QDir::tempPath();
 #endif
+        s_CacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
         s_BoxArtCacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/boxart";
     }
 }

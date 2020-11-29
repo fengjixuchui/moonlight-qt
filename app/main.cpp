@@ -11,6 +11,7 @@
 #include <QCursor>
 #include <QElapsedTimer>
 #include <QFile>
+#include<QTranslator>
 
 // Don't let SDL hook our main function, since Qt is already
 // doing the same thing. This needs to be before any headers
@@ -196,7 +197,7 @@ LONG WINAPI UnhandledExceptionHandler(struct _EXCEPTION_POINTERS *ExceptionInfo)
     WCHAR dmpFileName[MAX_PATH];
     swprintf_s(dmpFileName, L"%ls\\Moonlight-%I64u.dmp",
                (PWCHAR)QDir::toNativeSeparators(Path::getLogDir()).utf16(), QDateTime::currentSecsSinceEpoch());
-    QString qDmpFileName = QString::fromUtf16((unsigned short*)dmpFileName);
+    QString qDmpFileName = QString::fromUtf16((const char16_t*)dmpFileName);
     HANDLE dumpHandle = CreateFileW(dmpFileName, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (dumpHandle != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION info;
@@ -305,8 +306,10 @@ int main(int argc, char *argv[])
     // NB: We can't use QGuiApplication::platformName() here because it is only
     // set once the QGuiApplication is created, which is too late to enable High DPI :(
     if (WMUtils::isRunningWindowManager()) {
-        // Enable High DPI support
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        // Enable High DPI support on Qt 5.x. It is always enabled on Qt 6.0
         QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+#endif
 
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
         // Enable fractional High DPI scaling on Qt 5.14 and later
@@ -331,7 +334,7 @@ int main(int argc, char *argv[])
     // password prompts on macOS.
     qputenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1");
 
-#ifdef Q_OS_WIN32
+#if defined(Q_OS_WIN32) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     if (!qEnvironmentVariableIsSet("QT_OPENGL")) {
         // On Windows, use ANGLE so we don't have to load OpenGL
         // user-mode drivers into our app. OGL drivers (especially Intel)
@@ -417,6 +420,10 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
 
+    QTranslator translator;
+    qDebug() << "Translation loaded:" << translator.load(QString(":/languages/qml_") + QLocale::system().name());
+    app.installTranslator(&translator);
+
     // After the QGuiApplication is created, the platform stuff will be initialized
     // and we can set the SDL video driver to match Qt.
     if (WMUtils::isRunningWayland() && QGuiApplication::platformName() == "xcb") {
@@ -455,7 +462,11 @@ int main(int argc, char *argv[])
     }
 #endif
 
+#ifndef Q_OS_DARWIN
+    // Set the window icon except on macOS where we want to keep the
+    // modified macOS 11 style rounded corner icon.
     app.setWindowIcon(QIcon(":/res/moonlight.svg"));
+#endif
 
     // Register our C++ types for QML
     qmlRegisterType<ComputerModel>("ComputerModel", 1, 0, "ComputerModel");
@@ -551,7 +562,6 @@ int main(int argc, char *argv[])
     engine.load(QUrl(QStringLiteral("qrc:/gui/main.qml")));
     if (engine.rootObjects().isEmpty())
         return -1;
-
     int err = app.exec();
 
     // Give worker tasks time to properly exit. Fixes PendingQuitTask

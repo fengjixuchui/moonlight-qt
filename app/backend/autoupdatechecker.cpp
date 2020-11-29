@@ -39,7 +39,13 @@ void AutoUpdateChecker::start()
 
     // We'll get a callback when this is finished
     QUrl url("https://moonlight-stream.org/updates/qt.json");
-    m_Nam.get(QNetworkRequest(url));
+    QNetworkRequest request(url);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
+#else
+    request.setAttribute(QNetworkRequest::HTTP2AllowedAttribute, true);
+#endif
+    m_Nam.get(request);
 #endif
 }
 
@@ -68,7 +74,12 @@ void AutoUpdateChecker::handleUpdateCheckRequestFinished(QNetworkReply* reply)
 
     if (reply->error() == QNetworkReply::NoError) {
         QTextStream stream(reply);
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        stream.setEncoding(QStringConverter::Utf8);
+#else
         stream.setCodec("UTF-8");
+#endif
 
         // Read all data and queue the reply for deletion
         QString jsonString = stream.readAll();

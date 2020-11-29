@@ -132,6 +132,7 @@ SOURCES += \
     cli/commandlineparser.cpp \
     cli/quitstream.cpp \
     cli/startstream.cpp \
+    settings/mappingfetcher.cpp \
     settings/streamingpreferences.cpp \
     streaming/input/abstouch.cpp \
     streaming/input/gamepad.cpp \
@@ -155,6 +156,7 @@ SOURCES += \
 
 HEADERS += \
     backend/nvapp.h \
+    settings/mappingfetcher.h \
     utils.h \
     backend/computerseeker.h \
     backend/identitymanager.h \
@@ -310,6 +312,9 @@ discord-rpc {
 RESOURCES += \
     resources.qrc \
     qml.qrc
+
+TRANSLATIONS += \
+    languages/qml_fr.ts
 
 # Additional import path used to resolve QML modules in Qt Creator's code model
 QML_IMPORT_PATH =
