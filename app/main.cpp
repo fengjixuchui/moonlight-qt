@@ -23,7 +23,7 @@
 #include "streaming/video/ffmpeg.h"
 #endif
 
-#if defined(Q_OS_WIN32)
+#if defined(Q_OS_WIN32) && defined(Q_PROCESSOR_X86)
 #include "antihookingprotection.h"
 #elif defined(Q_OS_LINUX)
 #include <openssl/ssl.h>
@@ -289,9 +289,10 @@ int main(int argc, char *argv[])
     SetUnhandledExceptionFilter(UnhandledExceptionHandler);
 #endif
 
-#if defined(Q_OS_WIN32)
+#if defined(Q_OS_WIN32) && defined(Q_PROCESSOR_X86)
     // Force AntiHooking.dll to be statically imported and loaded
-    // by ntdll by calling a dummy function.
+    // by ntdll on x86/x64 platforms by calling a dummy function.
+    // AntiHooking.dll is not currently built for ARM64.
     AntiHookingDummyImport();
 #elif defined(Q_OS_LINUX)
     // Force libssl.so to be directly linked to our binary, so
@@ -340,6 +341,16 @@ int main(int argc, char *argv[])
         // user-mode drivers into our app. OGL drivers (especially Intel)
         // seem to crash Moonlight far more often than DirectX.
         qputenv("QT_OPENGL", "angle");
+    }
+#endif
+
+#if defined(Q_OS_DARWIN) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    if (!qEnvironmentVariableIsSet("QSG_RHI_BACKEND")) {
+        // The Metal backend in Qt 6.0.0 causes really strange issues transitioning to
+        // full-screen in our SDL window (hangs in SDL's Cocoa_SetWindowFullscreenSpace())
+        // and breaks drawing our status updates in the StreamSegue, so use OpenGL like
+        // Qt 5 does until we figure out the cause of these issues.
+        qputenv("QSG_RHI_BACKEND", "opengl");
     }
 #endif
 
