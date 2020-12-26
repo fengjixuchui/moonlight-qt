@@ -13,6 +13,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, NvComputer*, int s
     : m_MultiController(prefs.multiController),
       m_GamepadMouse(prefs.gamepadMouse),
       m_SwapMouseButtons(prefs.swapMouseButtons),
+      m_ReverseScrollDirection(prefs.reverseScrollDirection),
+      m_SwapFaceButtons(prefs.swapFaceButtons),
       m_MouseMoveTimer(0),
       m_MousePositionLock(0),
       m_MouseWasInVideoRegion(false),
@@ -30,8 +32,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, NvComputer*, int s
       m_DragButton(0),
       m_NumFingersDown(0)
 {
-    // Allow gamepad input when the app doesn't have focus
-    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    // Allow gamepad input when the app doesn't have focus if requested
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, prefs.backgroundGamepad ? "1" : "0");
 
     // If absolute mouse mode is enabled, use relative mode warp (which
     // is via normal motion events that are influenced by mouse acceleration).

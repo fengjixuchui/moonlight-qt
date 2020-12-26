@@ -73,9 +73,12 @@ void Session::clStageStarting(int stage)
 void Session::clStageFailed(int stage, int errorCode)
 {
     // Perform the port test now, while we're on the async connection thread and not blocking the UI.
-    s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, LiGetPortFlagsFromStage(stage));
+    unsigned int portFlags = LiGetPortFlagsFromStage(stage);
+    s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
 
-    emit s_ActiveSession->stageFailed(QString::fromLocal8Bit(LiGetStageName(stage)), errorCode);
+    char failingPorts[128];
+    LiStringifyPortFlags(portFlags, ", ", failingPorts, sizeof(failingPorts));
+    emit s_ActiveSession->stageFailed(QString::fromLocal8Bit(LiGetStageName(stage)), errorCode, QString(failingPorts));
 
 #ifndef USE_ASYNC_CONNECT_THREAD
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -85,7 +88,8 @@ void Session::clStageFailed(int stage, int errorCode)
 
 void Session::clConnectionTerminated(int errorCode)
 {
-    s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, LiGetPortFlagsFromTerminationErrorCode(errorCode));
+    unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
+    s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
 
     // Display the termination dialog if this was not intended
     switch (errorCode) {
@@ -94,12 +98,24 @@ void Session::clConnectionTerminated(int errorCode)
 
     case ML_ERROR_NO_VIDEO_TRAFFIC:
         s_ActiveSession->m_UnexpectedTermination = true;
-        emit s_ActiveSession->displayLaunchError(tr("No video received from host. Check the host PC's firewall and port forwarding rules."));
+
+        char ports[128];
+        SDL_assert(portFlags != 0);
+        LiStringifyPortFlags(portFlags, ", ", ports, sizeof(ports));
+        emit s_ActiveSession->displayLaunchError(tr("No video received from host.") + "\n\n"+
+                                                 tr("Check your firewall and port forwarding rules for port(s): %1").arg(ports));
         break;
 
     case ML_ERROR_NO_VIDEO_FRAME:
         s_ActiveSession->m_UnexpectedTermination = true;
         emit s_ActiveSession->displayLaunchError(tr("Your network connection isn't performing well. Reduce your video bitrate setting or try a faster connection."));
+        break;
+
+    case ML_ERROR_UNEXPECTED_EARLY_TERMINATION:
+        s_ActiveSession->m_UnexpectedTermination = true;
+        emit s_ActiveSession->displayLaunchError(tr("Something went wrong on your host PC when starting the stream.") + "\n\n" +
+                                                 tr("Make sure you don't have any DRM-protected content open on your host PC. You can also try restarting your host PC.") + "\n\n" +
+                                                 tr("If the issue persists, try reinstalling your GPU drivers and GeForce Experience."));
         break;
 
     default:
@@ -354,6 +370,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_DecoderLock(0),
       m_NeedsIdr(false),
       m_AudioDisabled(false),
+      m_AudioMuted(false),
       m_DisplayOriginX(0),
       m_DisplayOriginY(0),
       m_PendingWindowedTransition(false),
@@ -683,7 +700,9 @@ bool Session::validateLaunch(SDL_Window* testWindow)
 
     // NVENC will fail to initialize when using dimensions over 4096 and H.264.
     if (m_StreamConfig.width > 4096 || m_StreamConfig.height > 4096) {
-        if (m_Computer->maxLumaPixelsHEVC == 0) {
+        // Pascal added support for 8K HEVC encoding support. Maxwell 2 could encode HEVC but only up to 4K.
+        // We can't directly identify Pascal, but we can look for HEVC Main10 which was added in the same generation.
+        if (m_Computer->maxLumaPixelsHEVC == 0 || !(m_Computer->serverCodecModeSupport & 0x200)) {
             emit displayLaunchError(tr("Your host PC's GPU doesn't support streaming video resolutions over 4K."));
             return false;
         }
@@ -1300,11 +1319,25 @@ void Session::exec(int displayOriginX, int displayOriginY)
             break;
 
         case SDL_WINDOWEVENT:
-            if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            // Early handling of some events
+            switch (event.window.event) {
+            case SDL_WINDOWEVENT_FOCUS_LOST:
                 m_InputHandler->notifyFocusLost();
-            }
-            else if (event.window.event == SDL_WINDOWEVENT_LEAVE) {
+                break;
+            case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
+                break;
+            case SDL_WINDOWEVENT_MINIMIZED:
+                if (m_Preferences->muteOnMinimize) {
+                    m_AudioMuted = true;
+                }
+                break;
+            case SDL_WINDOWEVENT_MAXIMIZED:
+            case SDL_WINDOWEVENT_RESTORED:
+                if (m_Preferences->muteOnMinimize) {
+                    m_AudioMuted = false;
+                }
+                break;
             }
 
             // Capture the mouse on SDL_WINDOWEVENT_ENTER if needed
