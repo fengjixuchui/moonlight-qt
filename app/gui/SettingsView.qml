@@ -785,7 +785,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: qsTr("This enables mouse control without capturing the client's mouse cursor. It will not work in most games.") + "\n" +
+                    ToolTip.text: qsTr("This enables mouse control without capturing the client's mouse cursor. It will not work in most games.") + " " +
                                   qsTr("You can toggle this while streaming using Ctrl+Alt+Shift+M.")
                 }
 
@@ -880,7 +880,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Forces a single gamepad to always stay connected to the host, even if no gamepads are actually connected to this PC.") + "\n" +
+                    ToolTip.text: qsTr("Forces a single gamepad to always stay connected to the host, even if no gamepads are actually connected to this PC.") + " " +
                                   qsTr("Only enable this option when streaming a game that doesn't support gamepads being connected after startup.")
                 }
 
@@ -888,17 +888,12 @@ Flickable {
                     id: gamepadMouseCheck
                     hoverEnabled: true
                     width: parent.width
-                    text: qsTr("Gamepad mouse mode support")
-                    font.pointSize:  12
+                    text: qsTr("Enable mouse control with gamepads by holding the 'Start' button")
+                    font.pointSize: 12
                     checked: StreamingPreferences.gamepadMouse
                     onCheckedChanged: {
                         StreamingPreferences.gamepadMouse = checked
                     }
-
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 3000
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("When enabled, holding the Start button will toggle mouse mode")
                 }
 
                 CheckBox {

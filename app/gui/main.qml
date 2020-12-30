@@ -19,6 +19,10 @@ ApplicationWindow {
 
     visibility: (SystemProperties.hasWindowManager && StreamingPreferences.startWindowed) ? "Windowed" : "Maximized"
 
+    // This configures the maximum width of the singleton attached QML ToolTip. If left unconstrained,
+    // it will never insert a line break and just extend on forever.
+    ToolTip.toolTip.contentWidth: ToolTip.toolTip.implicitContentWidth < 400 ? ToolTip.toolTip.implicitContentWidth : 400
+
     StackView {
         id: stackView
         initialItem: initialView
@@ -401,7 +405,7 @@ ApplicationWindow {
     NavigableMessageDialog {
         id: wow64Dialog
         standardButtons: Dialog.Ok | Dialog.Cancel
-        text: qsTr("This PC is running a 64-bit version of Windows. Please download the x64 version of Moonlight for the best streaming performance.")
+        text: qsTr("This version of Moonlight isn't optimized for your PC. Please download the '%1' version of Moonlight for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
         onAccepted: {
             Qt.openUrlExternally("https://github.com/moonlight-stream/moonlight-qt/releases");
         }
