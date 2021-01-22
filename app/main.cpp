@@ -323,6 +323,13 @@ int main(int argc, char *argv[])
             qInfo() << "Unable to detect Wayland or X11, so EGLFS will be used by default. Set QT_QPA_PLATFORM to override this.";
             qputenv("QT_QPA_PLATFORM", "eglfs");
 
+            if (!qEnvironmentVariableIsSet("QT_QPA_EGLFS_ALWAYS_SET_MODE")) {
+                qInfo() << "Setting display mode by default. Set QT_QPA_EGLFS_ALWAYS_SET_MODE=0 to override this.";
+
+                // The UI doesn't appear on RetroPie without this option.
+                qputenv("QT_QPA_EGLFS_ALWAYS_SET_MODE", "1");
+            }
+
             if (!QFile("/dev/dri").exists()) {
                 qWarning() << "Unable to find a KMSDRM display device!";
                 qWarning() << "On the Raspberry Pi, you must enable the 'fake KMS' driver in raspi-config to use Moonlight outside of the GUI environment.";
@@ -386,6 +393,11 @@ int main(int argc, char *argv[])
     // are drawing directly to the screen without involving SDL, but it may matter for other
     // future KMSDRM platforms that use SDL for rendering.
     SDL_SetHint(SDL_HINT_VIDEO_DOUBLE_BUFFER, "1");
+
+    // Use Direct3D 9Ex to avoid a deadlock caused by the D3D device being reset when
+    // the user triggers a UAC prompt. This option controls the software/SDL renderer.
+    // The DXVA2 renderer uses Direct3D 9Ex itself directly.
+    SDL_SetHint("SDL_WINDOWS_USE_D3D9EX", "1");
 
     if (SDL_InitSubSystem(SDL_INIT_TIMER) != 0) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,

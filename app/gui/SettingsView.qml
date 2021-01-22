@@ -41,6 +41,12 @@ Flickable {
         StreamingPreferences.save()
     }
 
+    Component.onDestruction: {
+        // Also save preferences on destruction, since we won't get a
+        // deactivating callback if the user just closes Moonlight
+        StreamingPreferences.save()
+    }
+
     Column {
         padding: 10
         id: settingsColumn1
@@ -513,6 +519,7 @@ Flickable {
                     text: qsTr("Display mode")
                     font.pointSize: 12
                     wrapMode: Text.Wrap
+                    visible: SystemProperties.hasWindowManager
                 }
 
                 AutoResizingComboBox {
@@ -545,13 +552,14 @@ Flickable {
                     }
 
                     id: windowModeComboBox
-                    enabled: SystemProperties.hasWindowManager && !SystemProperties.rendererAlwaysFullScreen
+                    visible: SystemProperties.hasWindowManager
+                    enabled: !SystemProperties.rendererAlwaysFullScreen
                     hoverEnabled: true
                     textRole: "text"
                     model: ListModel {
                         id: windowModeListModel
                         ListElement {
-                            text: qsTr("Full-screen")
+                            text: qsTr("Fullscreen")
                             val: StreamingPreferences.WM_FULLSCREEN
                         }
                         ListElement {
@@ -570,7 +578,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Full-screen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.")
+                    ToolTip.text: qsTr("Fullscreen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.")
                 }
 
                 CheckBox {
@@ -685,14 +693,20 @@ Flickable {
                 }
 
                 CheckBox {
-                    id: muteOnMinimizeCheck
+                    id: muteOnFocusLossCheck
                     width: parent.width
-                    text: qsTr("Mute audio stream when Moonlight is minimized")
+                    text: qsTr("Mute audio stream when Moonlight is not the active window")
                     font.pointSize: 12
-                    checked: StreamingPreferences.muteOnMinimize
+                    visible: SystemProperties.hasWindowManager
+                    checked: StreamingPreferences.muteOnFocusLoss
                     onCheckedChanged: {
-                        StreamingPreferences.muteOnMinimize = checked
+                        StreamingPreferences.muteOnFocusLoss = checked
                     }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Mutes Moonlight's audio when you Alt+Tab out of the stream or click on a different window.")
                 }
             }
         }
@@ -708,15 +722,58 @@ Flickable {
                 anchors.fill: parent
                 spacing: 5
 
-                CheckBox {
-                    id: startMaximizedCheck
+                Label {
                     width: parent.width
-                    text: qsTr("Maximize Moonlight window on startup")
+                    id: uiDisplayModeTitle
+                    text: qsTr("GUI display mode")
                     font.pointSize: 12
-                    enabled: SystemProperties.hasWindowManager
-                    checked: !StreamingPreferences.startWindowed || !SystemProperties.hasWindowManager
-                    onCheckedChanged: {
-                        StreamingPreferences.startWindowed = !checked
+                    wrapMode: Text.Wrap
+                    visible: SystemProperties.hasWindowManager
+                }
+
+                AutoResizingComboBox {
+                    // ignore setting the index at first, and actually set it when the component is loaded
+                    Component.onCompleted: {
+                        if (SystemProperties.hasWindowManager) {
+                            var saved_uidisplaymode = StreamingPreferences.uiDisplayMode
+                            currentIndex = 0
+                            for (var i = 0; i < uiDisplayModeListModel.count; i++) {
+                                var el_uidisplaymode = uiDisplayModeListModel.get(i).val;
+                                if (saved_uidisplaymode === el_uidisplaymode) {
+                                    currentIndex = i
+                                    break
+                                }
+                            }
+                        }
+                        else {
+                            // Full-screen is always selected when there is no window manager
+                            currentIndex = 2
+                        }
+
+                        activated(currentIndex)
+                    }
+
+                    id: uiDisplayModeComboBox
+                    visible: SystemProperties.hasWindowManager
+                    textRole: "text"
+                    model: ListModel {
+                        id: uiDisplayModeListModel
+                        ListElement {
+                            text: qsTr("Windowed")
+                            val: StreamingPreferences.UI_WINDOWED
+                        }
+                        ListElement {
+                            text: qsTr("Maximized")
+                            val: StreamingPreferences.UI_MAXIMIZED
+                        }   
+                        ListElement {
+                            text: qsTr("Fullscreen")
+                            val: StreamingPreferences.UI_FULLSCREEN
+                        }
+                    }
+                    // ::onActivated must be used, as it only listens for when the index is changed by a human
+                    onActivated : {
+                        StreamingPreferences.uiDisplayMode = uiDisplayModeListModel.get(currentIndex).val
                     }
                 }
 
@@ -776,17 +833,37 @@ Flickable {
                     width: parent.width
                     text: qsTr("Optimize mouse for remote desktop instead of games")
                     font.pointSize:  12
-                    enabled: SystemProperties.hasWindowManager
-                    checked: StreamingPreferences.absoluteMouseMode && SystemProperties.hasWindowManager
+                    visible: SystemProperties.hasWindowManager
+                    checked: StreamingPreferences.absoluteMouseMode
                     onCheckedChanged: {
                         StreamingPreferences.absoluteMouseMode = checked
                     }
 
                     ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
+                    ToolTip.timeout: 10000
                     ToolTip.visible: hovered
-                    ToolTip.text: qsTr("This enables mouse control without capturing the client's mouse cursor. It will not work in most games.") + " " +
-                                  qsTr("You can toggle this while streaming using Ctrl+Alt+Shift+M.")
+                    ToolTip.text: qsTr("This enables seamless mouse control without capturing the client's mouse cursor. It is ideal for remote desktop usage but will not work in most games.") + " " +
+                                  qsTr("You can toggle this while streaming using Ctrl+Alt+Shift+M.") + "\n\n" +
+                                  qsTr("NOTE: Due to a bug in GeForce Experience, this option may not work properly if your host PC has multiple monitors.")
+                }
+
+                CheckBox {
+                    id: captureSysKeysCheck
+                    hoverEnabled: true
+                    width: parent.width
+                    text: qsTr("Capture system keyboard shortcuts while streaming in fullscreen")
+                    font.pointSize:  12
+                    enabled: SystemProperties.hasWindowManager
+                    checked: StreamingPreferences.captureSysKeys && SystemProperties.hasWindowManager
+                    onCheckedChanged: {
+                        StreamingPreferences.captureSysKeys = checked
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("This enables the capture of system-wide keyboard shortcuts like Alt+Tab that would normally be handled by the client OS while streaming in fullscreen.") + "\n\n" +
+                                  qsTr("NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Moonlight.")
                 }
 
                 CheckBox {
@@ -901,6 +978,7 @@ Flickable {
                     width: parent.width
                     text: qsTr("Process gamepad input when Moonlight is in the background")
                     font.pointSize: 12
+                    visible: SystemProperties.hasWindowManager
                     checked: StreamingPreferences.backgroundGamepad
                     onCheckedChanged: {
                         StreamingPreferences.backgroundGamepad = checked

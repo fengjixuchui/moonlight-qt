@@ -5,10 +5,6 @@
 
 #include <QGuiApplication>
 
-// Until we can fully capture these on all platforms (without conflicting with
-// OS-provided shortcuts), we should avoid passing them through to the host.
-//#define ENABLE_META
-
 #define VK_0 0x30
 #define VK_A 0x41
 
@@ -90,6 +86,14 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
             raiseAllKeys();
             return;
         }
+        // Check for the mouse mode toggle combo (Ctrl+Alt+Shift+D) unless on EGLFS which has no window manager
+        else if (event->keysym.sym == SDLK_d && QGuiApplication::platformName() != "eglfs") {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Detected minimize combo (SDLK)");
+
+            SDL_MinimizeWindow(m_Window);
+            return;
+        }
         // Check for overlay combo (Ctrl+Alt+Shift+S)
         else if (event->keysym.sym == SDLK_s) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -169,6 +173,14 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
             setCaptureActive(true);
             return;
         }
+        // Check for the mouse mode toggle combo (Ctrl+Alt+Shift+D) unless on EGLFS which has no window manager
+        else if (event->keysym.scancode == SDL_SCANCODE_D && QGuiApplication::platformName() != "eglfs") {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Detected minimize combo (scancode)");
+
+            SDL_MinimizeWindow(m_Window);
+            return;
+        }
         else if (event->keysym.scancode == SDL_SCANCODE_S) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Detected stats toggle combo (scancode)");
@@ -215,11 +227,11 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
     if (event->keysym.mod & KMOD_SHIFT) {
         modifiers |= MODIFIER_SHIFT;
     }
-#ifdef ENABLE_META
     if (event->keysym.mod & KMOD_GUI) {
-        modifiers |= MODIFIER_META;
+        if (isSystemKeyCaptureActive()) {
+            modifiers |= MODIFIER_META;
+        }
     }
-#endif
 
     // Set keycode. We explicitly use scancode here because GFE will try to correct
     // for AZERTY layouts on the host but it depends on receiving VK_ values matching
@@ -360,14 +372,18 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
             case SDL_SCANCODE_RALT:
                 keyCode = 0xA5;
                 break;
-            #ifdef ENABLE_META
             case SDL_SCANCODE_LGUI:
+                if (!isSystemKeyCaptureActive()) {
+                    return;
+                }
                 keyCode = 0x5B;
                 break;
             case SDL_SCANCODE_RGUI:
+                if (!isSystemKeyCaptureActive()) {
+                    return;
+                }
                 keyCode = 0x5C;
                 break;
-            #endif
             case SDL_SCANCODE_AC_BACK:
                 keyCode = 0xA6;
                 break;
@@ -441,7 +457,7 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         m_KeysDown.remove(keyCode);
     }
 
-    LiSendKeyboardEvent(keyCode,
+    LiSendKeyboardEvent(0x8000 | keyCode,
                         event->state == SDL_PRESSED ?
                             KEY_ACTION_DOWN : KEY_ACTION_UP,
                         modifiers);

@@ -112,8 +112,17 @@ bool SdlRenderer::initialize(PDECODER_PARAMETERS params)
     // can get spurious SDL_WINDOWEVENT events that will cause us to (again) recreate our
     // renderer. This can lead to an infinite to renderer recreation, so discard all
     // SDL_WINDOWEVENT events after SDL_CreateRenderer().
-    SDL_PumpEvents();
-    SDL_FlushEvent(SDL_WINDOWEVENT);
+    Session* session = Session::get();
+    if (session != nullptr) {
+        // If we get here during a session, we need to synchronize with the event loop
+        // to ensure we don't drop any important events.
+        session->flushWindowEvents();
+    }
+    else {
+        // If we get here prior to the start of a session, just pump and flush ourselves.
+        SDL_PumpEvents();
+        SDL_FlushEvent(SDL_WINDOWEVENT);
+    }
 
     // Calculate the video region size, scaling to fill the output size while
     // preserving the aspect ratio of the video stream.
@@ -291,25 +300,38 @@ void SdlRenderer::renderFrame(AVFrame* frame)
                              frame->linesize[2]);
     }
     else {
-        char* pixels;
-        int pitch;
+#if SDL_VERSION_ATLEAST(2, 0, 15)
+        // SDL_UpdateNVTexture is not supported on all renderer backends,
+        // (notably not DX9), so we must have a fallback in case it's not
+        // supported and for earlier versions of SDL.
+        if (SDL_UpdateNVTexture(m_Texture,
+                                nullptr,
+                                frame->data[0],
+                                frame->linesize[0],
+                                frame->data[1],
+                                frame->linesize[1]) != 0)
+#endif
+        {
+            char* pixels;
+            int pitch;
 
-        err = SDL_LockTexture(m_Texture, nullptr, (void**)&pixels, &pitch);
-        if (err < 0) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "SDL_LockTexture() failed: %s",
-                         SDL_GetError());
-            goto Exit;
+            err = SDL_LockTexture(m_Texture, nullptr, (void**)&pixels, &pitch);
+            if (err < 0) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "SDL_LockTexture() failed: %s",
+                             SDL_GetError());
+                goto Exit;
+            }
+
+            memcpy(pixels,
+                   frame->data[0],
+                   frame->linesize[0] * frame->height);
+            memcpy(pixels + (frame->linesize[0] * frame->height),
+                   frame->data[1],
+                   frame->linesize[1] * frame->height / 2);
+
+            SDL_UnlockTexture(m_Texture);
         }
-
-        memcpy(pixels,
-               frame->data[0],
-               frame->linesize[0] * frame->height);
-        memcpy(pixels + (frame->linesize[0] * frame->height),
-               frame->data[1],
-               frame->linesize[1] * frame->height / 2);
-
-        SDL_UnlockTexture(m_Texture);
     }
 
     SDL_RenderClear(m_Renderer);

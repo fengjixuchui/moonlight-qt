@@ -22,6 +22,8 @@
 #define ICON_SIZE 64
 #endif
 
+#define SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER 100
+
 #include <openssl/rand.h>
 
 #include <QtEndian>
@@ -378,6 +380,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_InputHandler(nullptr),
       m_InputHandlerLock(0),
       m_MouseEmulationRefCount(0),
+      m_FlushingWindowEventsRef(0),
       m_AsyncConnectionSuccess(false),
       m_PortTestResults(0),
       m_OpusDecoder(nullptr),
@@ -527,6 +530,15 @@ bool Session::initialize()
         m_FullScreenFlag = SDL_WINDOW_FULLSCREEN;
         break;
     }
+
+#ifdef Q_OS_DARWIN
+    // macOS behaves as if we're capturing system keys when
+    // we enter "real" full-screen mode, so use standard
+    // full-screen as our full-screen flag when capturing keys.
+    if (m_Preferences->captureSysKeys) {
+        m_FullScreenFlag = SDL_WINDOW_FULLSCREEN;
+    }
+#endif
 
 #if !SDL_VERSION_ATLEAST(2, 0, 11)
     // HACK: Using a full-screen window breaks mouse capture on the Pi's LXDE
@@ -932,8 +944,10 @@ void Session::toggleFullscreen()
     bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
 
     if (fullScreen) {
-        if (m_FullScreenFlag == SDL_WINDOW_FULLSCREEN && m_InputHandler->isCaptureActive()) {
-            // Confine the cursor to the window if we're capturing input
+        if ((m_FullScreenFlag == SDL_WINDOW_FULLSCREEN || m_Preferences->captureSysKeys) && m_InputHandler->isCaptureActive()) {
+            // Confine the cursor to the window if we're capturing input while transitioning to full screen.
+            // We also need to grab if we're capturing system keys, because SDL requires window grab to
+            // capture the keyboard on X11.
             SDL_SetWindowGrab(m_Window, SDL_TRUE);
         }
 
@@ -1091,6 +1105,23 @@ bool Session::startConnectionAsync()
 
     emit connectionStarted();
     return true;
+}
+
+void Session::flushWindowEvents()
+{
+    // Pump events to ensure all pending OS events are posted
+    SDL_PumpEvents();
+
+    // Insert a barrier to discard any additional window events.
+    // We don't use SDL_FlushEvent() here because it could cause
+    // important events to be lost.
+    m_FlushingWindowEventsRef++;
+
+    // This event will cause us to set m_FlushingWindowEvents back to false.
+    SDL_Event flushEvent = {};
+    flushEvent.type = SDL_USEREVENT;
+    flushEvent.user.code = SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER;
+    SDL_PushEvent(&flushEvent);
 }
 
 void Session::exec(int displayOriginX, int displayOriginY)
@@ -1313,6 +1344,9 @@ void Session::exec(int displayOriginX, int displayOriginY)
             case SDL_CODE_SHOW_CURSOR:
                 SDL_ShowCursor(SDL_ENABLE);
                 break;
+            case SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER:
+                m_FlushingWindowEventsRef--;
+                break;
             default:
                 SDL_assert(false);
             }
@@ -1322,21 +1356,18 @@ void Session::exec(int displayOriginX, int displayOriginY)
             // Early handling of some events
             switch (event.window.event) {
             case SDL_WINDOWEVENT_FOCUS_LOST:
+                if (m_Preferences->muteOnFocusLoss) {
+                    m_AudioMuted = true;
+                }
                 m_InputHandler->notifyFocusLost();
+                break;
+            case SDL_WINDOWEVENT_FOCUS_GAINED:
+                if (m_Preferences->muteOnFocusLoss) {
+                    m_AudioMuted = false;
+                }
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
-                break;
-            case SDL_WINDOWEVENT_MINIMIZED:
-                if (m_Preferences->muteOnMinimize) {
-                    m_AudioMuted = true;
-                }
-                break;
-            case SDL_WINDOWEVENT_MAXIMIZED:
-            case SDL_WINDOWEVENT_RESTORED:
-                if (m_Preferences->muteOnMinimize) {
-                    m_AudioMuted = false;
-                }
                 break;
             }
 
@@ -1372,6 +1403,16 @@ void Session::exec(int displayOriginX, int displayOriginY)
                 SDL_SetWindowPosition(m_Window, x, y);
             }
 
+            if (m_FlushingWindowEventsRef > 0) {
+                // Ignore window events for renderer reset if flushing
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Dropping window event during flush: %d (%d %d)",
+                            event.window.event,
+                            event.window.data1,
+                            event.window.data2);
+                break;
+            }
+
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Recreating renderer for window event: %d (%d %d)",
                         event.window.event,
@@ -1387,10 +1428,11 @@ void Session::exec(int displayOriginX, int displayOriginY)
             // Destroy the old decoder
             delete m_VideoDecoder;
 
-            // Flush any other pending window events that could
-            // send us back here immediately
-            SDL_PumpEvents();
-            SDL_FlushEvent(SDL_WINDOWEVENT);
+            // Insert a barrier to discard any additional window events
+            // that could cause the renderer to be and recreated again.
+            // We don't use SDL_FlushEvent() here because it could cause
+            // important events to be lost.
+            flushWindowEvents();
 
             // Update the window display mode based on our current monitor
             currentDisplayIndex = SDL_GetWindowDisplayIndex(m_Window);
@@ -1436,7 +1478,7 @@ void Session::exec(int displayOriginX, int displayOriginY)
                 // is set up, this ensures the window re-creation is already done.
                 if (needsPostDecoderCreationCapture) {
                     m_InputHandler->setCaptureActive(true);
-                    needsFirstEnterCapture = false;
+                    needsPostDecoderCreationCapture = false;
                 }
             }
 

@@ -197,7 +197,11 @@ CenteredGridView {
             }
 
             var component = Qt.createComponent("StreamSegue.qml")
-            var segue = component.createObject(stackView, {"appName": model.name, "session": appModel.createSessionForApp(index)})
+            var segue = component.createObject(stackView, {
+                                                   "appName": model.name,
+                                                   "session": appModel.createSessionForApp(index),
+                                                   "isResume": runningId === model.appid
+                                               })
             stackView.push(segue)
         }
 
@@ -285,6 +289,11 @@ CenteredGridView {
                 text: qsTr("Hide Game")
                 onTriggered: appModel.setAppHidden(model.index, !model.hidden)
                 enabled: model.hidden || (!model.running && !model.directLaunch)
+
+                ToolTip.text: qsTr("Hide this game from the app grid. To access hidden games, right-click on the host and choose %1.").arg(qsTr("View All Apps"))
+                ToolTip.delay: 1000
+                ToolTip.timeout: 5000
+                ToolTip.visible: hovered
             }
         }
     }
